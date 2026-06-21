@@ -401,6 +401,23 @@ def source_enabled(source: dict[str, Any]) -> bool:
     return bool(source.get("enabled", True))
 
 
+def source_display_name_map(config: dict[str, Any]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    configured = config.get("source_display_names", {})
+    if isinstance(configured, dict):
+        for key, value in configured.items():
+            if key and value:
+                names[str(key)] = str(value)
+    for source in config.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        name = source.get("name")
+        display_name = source.get("display_name")
+        if name and display_name:
+            names[str(name)] = str(display_name)
+    return names
+
+
 def source_value(source: Any, key: str, default: Any = None) -> Any:
     try:
         value = source[key]
@@ -4105,6 +4122,7 @@ class DesktopDashboard:
         self.store = store
         self.config = config
         self.refresh_ms = max(1, int(config.get("gui", {}).get("refresh_seconds", 5))) * 1000
+        self.source_labels = source_display_name_map(config)
         self.colors = {
             "bg": "#0b1014",
             "panel": "#0f151b",
@@ -4620,6 +4638,22 @@ class DesktopDashboard:
             self.status_var.set(f"Error: {exc}")
         self.root.after(self.refresh_ms, self.refresh)
 
+    def source_label(self, name: Any) -> str:
+        raw = str(name or "")
+        return self.source_labels.get(raw, raw)
+
+    def source_detail_label(self, detail: Any) -> str:
+        if not detail:
+            return "--"
+        parts = []
+        for item in str(detail).split(", "):
+            if ":" not in item:
+                parts.append(item)
+                continue
+            source_name, rest = item.split(":", 1)
+            parts.append(f"{self.source_label(source_name)}:{rest}")
+        return ", ".join(parts)
+
     def render(self, payload: dict[str, Any]) -> None:
         self.notify_vote_found(payload)
         self.latest_payload = payload
@@ -4660,7 +4694,7 @@ class DesktopDashboard:
             "sources",
             [
                 (
-                    row["source"],
+                    self.source_label(row["source"]),
                     row["votes"],
                     row["ok_polls"],
                     row["failed_polls"],
@@ -4675,7 +4709,7 @@ class DesktopDashboard:
             "trusted_sources",
             [
                 (
-                    row["source"],
+                    self.source_label(row["source"]),
                     f"{row['score'] * 100:.0f}%",
                     f"{row['success_rate'] * 100:.0f}%",
                     format_duration(row["freshness_seconds"]),
@@ -4690,7 +4724,7 @@ class DesktopDashboard:
             [
                 (
                     row["username"],
-                    row["source"],
+                    self.source_label(row["source"]),
                     row.get("vote_time_local") or "--",
                     row.get("detected_at_local") or "--",
                 )
@@ -4760,9 +4794,9 @@ class DesktopDashboard:
             ("Drift/hour", format_optional(stats["estimate_error"]["drift_per_hour"])),
             ("Downtime gaps", stats["downtime"]["gap_count"]),
             ("Missed votes est.", f"{stats['downtime']['missed_vote_estimate']:.1f}"),
-            ("Most trusted", trusted.get("source", "--")),
+            ("Most trusted", self.source_label(trusted.get("source", "--"))),
             ("Likely full-site voters", len(overlap["likely_full_site_voters"])),
-            ("Worst source", worst_diag.get("source", "--")),
+            ("Worst source", self.source_label(worst_diag.get("source", "--"))),
             ("Worst source score", f"{round(worst_diag.get('health_score', 0))}%" if worst_diag else "--"),
             ("Solo-source votes", solo_votes),
             ("Catchup votes", catchup_votes),
@@ -4779,7 +4813,7 @@ class DesktopDashboard:
             "diagnostics",
             [
                 (
-                    row["source"],
+                    self.source_label(row["source"]),
                     f"{round(row['success_rate'] * 100)}%",
                     row["failed_polls"],
                     row["skipped_polls"],
@@ -4798,7 +4832,7 @@ class DesktopDashboard:
                 (
                     local_time_short(row["ended_at"]),
                     row["total_delta"],
-                    row["positive_detail"] or "--",
+                    self.source_detail_label(row["positive_detail"]),
                     row["note"],
                 )
                 for row in history["source_delta_trace"][:40]
@@ -4809,7 +4843,7 @@ class DesktopDashboard:
             [
                 (
                     local_time_short(row["checked_at"]),
-                    row["source"],
+                    self.source_label(row["source"]),
                     "skip" if row["skipped"] else "fail",
                     row["error"],
                 )
