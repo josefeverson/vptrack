@@ -1,0 +1,135 @@
+{
+  "vp_party_size": 120,
+  "database_path": "vp_tracker.sqlite3",
+  "polling": {
+    "normal_interval_seconds": 90,
+    "near_interval_seconds": 20,
+    "trigger_interval_seconds": 8,
+    "near_threshold": 100,
+    "trigger_threshold": 116,
+    "http_timeout_seconds": 20,
+    "failed_source_backoff_seconds": 180,
+    "failed_source_max_backoff_seconds": 1800
+  },
+  "minecraft": {
+    "mode": "notify",
+    "auto_join_enabled": false,
+    "prelaunch_threshold": 110,
+    "join_threshold_high_confidence": 118,
+    "join_threshold_medium_confidence": 119,
+    "estimated_join_seconds": 35,
+    "join_safety_buffer_votes": 1,
+    "max_online_seconds": 240,
+    "hard_disconnect_seconds": 300,
+    "disconnect_if_chat_vp_below": 115,
+    "reward_disconnect_delay_seconds": 8,
+    "latest_log_path": "",
+    "reward_detection_patterns": [
+      "plushie",
+      "pokemon plushie",
+      "pok\u00e9mon plushie"
+    ],
+    "prelaunch_command": "",
+    "join_command": "",
+    "disconnect_command": ""
+  },
+  "confidence": {
+    "require_count_sources": 3,
+    "max_minutes_since_successful_poll": 2,
+    "max_minutes_since_calibration": 180,
+    "large_delta_warning": 24
+  },
+  "estimation": {
+    "poll_lock_ttl_seconds": 120,
+    "single_source_burst_limit": 3,
+    "reader_single_source_burst_limit": 0,
+    "stale_count_source_inference_enabled": true,
+    "stale_count_source_min_peer_sources": 3,
+    "stale_count_source_min_peer_delta": 1,
+    "stale_count_source_max_inferred_per_poll": 6
+  },
+  "alerts": {
+    "desktop_notifications": true,
+    "discord_webhook_url": ""
+  },
+  "gui": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "open_browser": true,
+    "refresh_seconds": 5,
+    "vote_notifications": true,
+    "vote_sound": true
+  },
+  "http": {
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) VotePartyTracker/1.0",
+    "reader_base_url": "https://r.jina.ai/"
+  },
+  "sources": [
+    {
+      "name": "count_source_1",
+      "url": "https://example.invalid/vote-source-1",
+      "type": "count",
+      "parser": "votes_this_month",
+      "recent_parser": "",
+      "fetcher": "http",
+      "fallback_fetcher": "",
+      "date_timezone": "local",
+      "enabled": false
+    },
+    {
+      "name": "count_source_2",
+      "url": "https://example.invalid/vote-source-2",
+      "type": "count",
+      "parser": "vote_s_count",
+      "recent_parser": "",
+      "fetcher": "http",
+      "fallback_fetcher": "",
+      "date_timezone": "local",
+      "enabled": false
+    },
+    {
+      "name": "count_source_3",
+      "url": "https://example.invalid/vote-source-3",
+      "type": "count",
+      "parser": "players_have_voted",
+      "recent_parser": "",
+      "fetcher": "http",
+      "fallback_fetcher": "",
+      "date_timezone": "local",
+      "enabled": false
+    },
+    {
+      "name": "count_source_4",
+      "url": "https://example.invalid/vote-source-4",
+      "type": "count",
+      "parser": "votes_heading_count",
+      "recent_parser": "",
+      "fetcher": "http",
+      "fallback_fetcher": "",
+      "date_timezone": "local",
+      "enabled": false
+    },
+    {
+      "name": "recent_list_source",
+      "url": "https://example.invalid/recent-voters",
+      "type": "recent",
+      "parser": "recent_username_dates",
+      "recent_parser": "",
+      "fetcher": "http",
+      "fallback_fetcher": "",
+      "date_timezone": "local",
+      "enabled": false
+    },
+    {
+      "name": "recent_total_source",
+      "url": "https://example.invalid/recent-total",
+      "type": "count",
+      "parser": "recent_votes_count",
+      "recent_parser": "recent_username_dates",
+      "fetcher": "http",
+      "fallback_fetcher": "",
+      "date_timezone": "local",
+      "enabled": false
+    }
+  ]
+}

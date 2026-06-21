@@ -1,0 +1,4 @@
+# Runtime uses only the Python standard library.
+# Install the local CLI with:
+#   python -m pip install -e .
+-e .
