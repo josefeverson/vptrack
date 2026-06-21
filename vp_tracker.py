@@ -5574,6 +5574,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.calibrate is not None:
             store.calibrate(args.calibrate)
+            publish_next_poll_due(store, utc_now(), args.calibrate)
             print(f"Calibrated VP estimate to {args.calibrate % int(config['vp_party_size'])}/120")
 
         if args.status:
