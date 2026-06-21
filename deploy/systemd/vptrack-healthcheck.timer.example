@@ -1,0 +1,11 @@
+[Unit]
+Description=Run vote tracker health check every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=vptrack-healthcheck.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Vote tracker daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vptrack
+ExecStart=/opt/vptrack/.venv/bin/python -u /opt/vptrack/vp_tracker.py --config /etc/vptrack/config.json --daemon
+Restart=always
+RestartSec=10
+User=vptrack
+Group=vptrack
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

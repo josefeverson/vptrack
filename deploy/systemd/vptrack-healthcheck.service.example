@@ -1,0 +1,10 @@
+[Unit]
+Description=Vote tracker health check
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vptrack
+ExecStart=/opt/vptrack/.venv/bin/python /opt/vptrack/vp_tracker.py --config /etc/vptrack/config.json --healthcheck
+User=vptrack
+Group=vptrack
+Environment=PYTHONUNBUFFERED=1

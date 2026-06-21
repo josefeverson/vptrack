@@ -286,8 +286,8 @@ class StoreTests(unittest.TestCase):
             store = vp_tracker.Store(db_path, config)
             try:
                 store.calibrate(10)
-                self.assertEqual(store.source_failure_backoff_seconds(1), 90)
-                self.assertEqual(store.source_failure_backoff_seconds(2), 180)
+                self.assertEqual(store.source_failure_backoff_seconds(1), 15)
+                self.assertEqual(store.source_failure_backoff_seconds(2), 30)
                 store.set_poll_interval_override_seconds(20)
                 self.assertEqual(store.source_failure_backoff_seconds(1), 20)
 
@@ -308,8 +308,54 @@ class StoreTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_healthcheck_payload_tracks_fresh_poll_and_sources(self):
+        config = copy.deepcopy(vp_tracker.DEFAULT_CONFIG)
+        config["service"]["minimum_successful_sources"] = 2
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            store = vp_tracker.Store(db_path, config)
+            try:
+                store.conn.execute(
+                    """
+                    UPDATE vote_sources
+                    SET enabled = 1
+                    WHERE name IN ('count_source_1', 'count_source_2')
+                    """
+                )
+                store.conn.commit()
+                store.calibrate(10)
+                now = vp_tracker.utc_now()
+                store.record_poll_cycle(
+                    vp_tracker.PollCycleResult(
+                        started_at=now - vp_tracker.timedelta(seconds=1),
+                        ended_at=now,
+                        estimate_before=10,
+                        total_delta=1,
+                        successes=2,
+                        failures=0,
+                        count_successes=2,
+                        resets=0,
+                        large_jumps=0,
+                        confidence="high",
+                        estimate_after=11,
+                        vote_parties_crossed=0,
+                        source_results=[
+                            vp_tracker.PollSourceResult("count_source_1", True, delta=1),
+                            vp_tracker.PollSourceResult("count_source_2", True, delta=0),
+                        ],
+                    )
+                )
+
+                payload = vp_tracker.healthcheck_payload(store, config)
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["sources"]["fresh_successful"], 2)
+                self.assertTrue(payload["checks"]["latest_poll_fresh"])
+            finally:
+                store.close()
+
     def test_stale_count_source_inference_is_credited_and_absorbed(self):
         config = copy.deepcopy(vp_tracker.DEFAULT_CONFIG)
+        config["estimation"]["stale_count_source_inference_enabled"] = True
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.sqlite3"
             store = vp_tracker.Store(db_path, config)

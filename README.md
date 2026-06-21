@@ -53,6 +53,9 @@ vp-track --reset-db --calibrate 73 --once
 
 # Print full analytics as JSON
 vp-track --stats
+
+# Machine-readable service health for monitors/systemd
+vp-track --healthcheck
 ```
 
 ## How It Works
@@ -70,10 +73,11 @@ vp-track --stats
 - Stores per-source poll deltas, source reliability, and estimated Vote Party crossings.
 - Applies vote deltas to the calibrated in-game VP count modulo 120.
 - Raises polling frequency near the party:
-  - normal: 90 seconds
-  - near `100/120`: 20 seconds
-  - trigger zone `116/120`: 8 seconds
+  - normal: 15 seconds
+  - near `100/120`: 10 seconds
+  - trigger zone `116/120`: 5 seconds
 - Computes confidence from calibration freshness, count-source success, resets, failures, and large jumps.
+- Leaves stale count-source inference disabled by default; faster polling and calibration logs are safer than guessing delayed site updates.
 
 ## Dashboard And Statistics
 
@@ -88,7 +92,7 @@ vp-track --stats
 - per-source vote contribution, skipped polls, reader fallback use, and reliability
 - source diagnostics for long-running failures, skipped polls, reader fallback use, solo-source deltas, and catch-up bursts
 - delta trace showing which source contributed each observed vote increase
-- stale count-source inference with credit absorption when a delayed source catches up
+- delayed source catch-up diagnostics and suppressed single-source burst visibility
 - latest observed voters with local vote and detection time labels
 - username frequency stats over recent windows
 - peak/quiet voting hours and Vote Party probability by hour
@@ -109,6 +113,22 @@ vp-track --web --no-open
 ```
 
 The browser API intentionally omits source URLs. Keep real server URLs in local `config.json`, which is ignored by git.
+
+## Server Deployment Groundwork
+
+The tracker can run headless on a small Linux server with the daemon command:
+
+```bash
+vp-track --config /etc/vptrack/config.json --daemon
+```
+
+Use the health check for uptime monitors, cron, or systemd watchdog wrappers:
+
+```bash
+vp-track --config /etc/vptrack/config.json --healthcheck
+```
+
+Example systemd unit and timer files live in `deploy/systemd/`. They are generic templates using `/opt/vptrack` and `/etc/vptrack/config.json`; edit those paths on the target host. Keep the real config private and outside git.
 
 ## Opsec Defaults
 
@@ -191,6 +211,7 @@ Keep these hooks simple: launch/open/join/disconnect only. Do not add movement l
 
 - `vp_tracker.py`: tracker CLI and daemon.
 - `config.example.json`: generic config reference; copy/fill locally.
+- `deploy/systemd/`: generic service and healthcheck examples for 24/7 hosts.
 - `config.json`: local editable config, created by `--init-config` and ignored by git.
 - `vp_tracker.sqlite3`: local state database, created automatically.
 - `tests/test_vp_tracker.py`: parser and helper tests.

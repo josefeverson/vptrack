@@ -2,9 +2,9 @@
   "vp_party_size": 120,
   "database_path": "vp_tracker.sqlite3",
   "polling": {
-    "normal_interval_seconds": 90,
-    "near_interval_seconds": 20,
-    "trigger_interval_seconds": 8,
+    "normal_interval_seconds": 15,
+    "near_interval_seconds": 10,
+    "trigger_interval_seconds": 5,
     "near_threshold": 100,
     "trigger_threshold": 116,
     "http_timeout_seconds": 20,
@@ -43,7 +43,7 @@
     "poll_lock_ttl_seconds": 120,
     "single_source_burst_limit": 3,
     "reader_single_source_burst_limit": 0,
-    "stale_count_source_inference_enabled": true,
+    "stale_count_source_inference_enabled": false,
     "stale_count_source_min_peer_sources": 3,
     "stale_count_source_min_peer_delta": 1,
     "stale_count_source_max_inferred_per_poll": 6
@@ -59,6 +59,10 @@
     "refresh_seconds": 5,
     "vote_notifications": true,
     "vote_sound": true
+  },
+  "service": {
+    "healthcheck_max_poll_age_seconds": 180,
+    "minimum_successful_sources": 3
   },
   "http": {
     "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) VotePartyTracker/1.0",

@@ -44,9 +44,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "vp_party_size": 120,
     "database_path": str(DEFAULT_DB_PATH),
     "polling": {
-        "normal_interval_seconds": 90,
-        "near_interval_seconds": 20,
-        "trigger_interval_seconds": 8,
+        "normal_interval_seconds": 15,
+        "near_interval_seconds": 10,
+        "trigger_interval_seconds": 5,
         "near_threshold": 100,
         "trigger_threshold": 116,
         "http_timeout_seconds": 20,
@@ -85,7 +85,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "poll_lock_ttl_seconds": 120,
         "single_source_burst_limit": 3,
         "reader_single_source_burst_limit": 0,
-        "stale_count_source_inference_enabled": True,
+        "stale_count_source_inference_enabled": False,
         "stale_count_source_min_peer_sources": 3,
         "stale_count_source_min_peer_delta": 1,
         "stale_count_source_max_inferred_per_poll": 6,
@@ -101,6 +101,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "refresh_seconds": 5,
         "vote_notifications": True,
         "vote_sound": True,
+    },
+    "service": {
+        "healthcheck_max_poll_age_seconds": 180,
+        "minimum_successful_sources": 3,
     },
     "http": {
         "user_agent": (
@@ -3395,6 +3399,97 @@ def print_status(store: Store, config: dict[str, Any]) -> None:
         print(f"- {row['checked_at']} {row['source_name']} {status}{count} {detail}")
 
 
+def healthcheck_payload(store: Store, config: dict[str, Any]) -> dict[str, Any]:
+    service = config.get("service", {})
+    max_age = int(service.get("healthcheck_max_poll_age_seconds", 180))
+    min_sources = int(service.get("minimum_successful_sources", 3))
+    state = store.get_state()
+    estimate = int(state["current_estimate"])
+    party_size = int(config["vp_party_size"])
+    recent_cycles = store.recent_cycles(1)
+    latest_cycle = row_to_dict(recent_cycles[0]) if recent_cycles else None
+    latest_poll_at = parse_iso(latest_cycle["ended_at"]) if latest_cycle else None
+    latest_poll_age = (
+        int(max(0, (utc_now() - latest_poll_at).total_seconds()))
+        if latest_poll_at
+        else None
+    )
+
+    active_sources = [row for row in store.source_rows() if bool(row["enabled"])]
+    latest_results: dict[str, sqlite3.Row] = {}
+    for row in store.recent_source_results(500):
+        latest_results.setdefault(str(row["source_name"]), row)
+
+    fresh_successes: list[str] = []
+    failing_sources: list[dict[str, Any]] = []
+    stale_sources: list[str] = []
+    for source in active_sources:
+        name = str(source["name"])
+        result = latest_results.get(name)
+        checked_at = parse_iso(result["checked_at"]) if result else None
+        age = (
+            int(max(0, (utc_now() - checked_at).total_seconds()))
+            if checked_at
+            else None
+        )
+        if result and bool(result["success"]) and age is not None and age <= max_age:
+            fresh_successes.append(name)
+        elif result and not bool(result["success"]):
+            failing_sources.append(
+                {
+                    "source": name,
+                    "age_seconds": age,
+                    "skipped": bool(result["skipped"]),
+                    "error": result["error"] or "",
+                }
+            )
+        if age is None or age > max_age:
+            stale_sources.append(name)
+
+    latest_poll_fresh = latest_poll_age is not None and latest_poll_age <= max_age
+    enough_sources = len(fresh_successes) >= min_sources
+    ok = latest_poll_fresh and enough_sources
+    return {
+        "ok": ok,
+        "generated_at": iso(),
+        "estimate": {
+            "current": estimate,
+            "party_size": party_size,
+            "remaining": votes_remaining(estimate, party_size),
+            "confidence": state["confidence"],
+            "last_calibrated_at": state["last_calibrated_at"],
+            "last_updated_at": state["last_updated_at"],
+        },
+        "polling": {
+            "latest_cycle": latest_cycle,
+            "latest_poll_age_seconds": latest_poll_age,
+            "max_poll_age_seconds": max_age,
+            "next_poll_due_at": iso(store.next_poll_due_at()) if store.next_poll_due_at() else None,
+            "poll_interval_seconds": store.effective_poll_interval_seconds(estimate),
+            "poll_interval_override_seconds": store.poll_interval_override_seconds(),
+        },
+        "sources": {
+            "active": len(active_sources),
+            "minimum_successful": min_sources,
+            "fresh_successful": len(fresh_successes),
+            "fresh_successful_names": fresh_successes,
+            "stale": len(stale_sources),
+            "stale_names": stale_sources,
+            "failing": failing_sources[:12],
+        },
+        "checks": {
+            "latest_poll_fresh": latest_poll_fresh,
+            "enough_sources": enough_sources,
+        },
+    }
+
+
+def run_healthcheck(store: Store, config: dict[str, Any]) -> int:
+    payload = healthcheck_payload(store, config)
+    print(json.dumps(payload, indent=2, default=str))
+    return 0 if payload["ok"] else 1
+
+
 def run_daemon(store: Store, config: dict[str, Any]) -> None:
     notifier = Notifier(config)
     controller = MinecraftController(config, store, notifier)
@@ -3439,6 +3534,7 @@ def run_once(store: Store, config: dict[str, Any]) -> None:
     cycle.log_events.extend(chat.poll())
     cycle.action_messages.extend(controller.maybe_act(cycle.confidence))
     cycle.action_messages.extend(controller.monitor_online_limits())
+    publish_next_poll_due(store, cycle.ended_at, cycle.estimate_after)
     print(describe_cycle(cycle, store, config))
     for source_result in cycle.source_results:
         if source_result.success:
@@ -4009,11 +4105,26 @@ class DesktopDashboard:
         self.store = store
         self.config = config
         self.refresh_ms = max(1, int(config.get("gui", {}).get("refresh_seconds", 5))) * 1000
+        self.colors = {
+            "bg": "#0b1014",
+            "panel": "#0f151b",
+            "card": "#141c23",
+            "card_soft": "#17212a",
+            "line": "#26323a",
+            "text": "#e8f0eb",
+            "muted": "#9aa8a1",
+            "accent": "#7dd3ae",
+            "accent_dim": "#24463a",
+            "warning": "#f5c66a",
+            "blue": "#8fb3ff",
+            "graph_bg": "#0c1217",
+            "danger": "#f08d8d",
+        }
         self.root = tk.Tk()
         self.root.title("Vote Party Tracker")
-        self.root.geometry("1480x980")
-        self.root.minsize(1120, 760)
-        self.root.configure(bg="#090a0b")
+        self.root.geometry("1520x1000")
+        self.root.minsize(1180, 760)
+        self.root.configure(bg=self.colors["bg"])
         self.metric_vars: dict[str, Any] = {}
         self.tables: dict[str, Any] = {}
         self.table_rows: dict[str, list[tuple[Any, ...]]] = {}
@@ -4042,32 +4153,94 @@ class DesktopDashboard:
             style.theme_use("clam")
         except Exception:
             pass
-        style.configure(".", background="#090a0b", foreground="#eef4ef", fieldbackground="#111316")
-        style.configure("TFrame", background="#090a0b")
-        style.configure("Card.TFrame", background="#111316", relief="flat")
-        style.configure("Panel.TFrame", background="#0d0f11", relief="flat")
-        style.configure("TLabel", background="#090a0b", foreground="#eef4ef")
-        style.configure("Muted.TLabel", background="#090a0b", foreground="#8f9b95")
-        style.configure("Card.TLabel", background="#111316", foreground="#eef4ef")
-        style.configure("MutedCard.TLabel", background="#111316", foreground="#8f9b95")
-        style.configure("Metric.TLabel", background="#111316", foreground="#eef4ef", font=("Menlo", 24, "bold"))
-        style.configure("TButton", background="#171a1d", foreground="#eef4ef", bordercolor="#2a2f33")
-        style.configure("Accent.TButton", background="#1f3d34", foreground="#eef4ef", bordercolor="#4fc98b")
-        style.configure("Dashboard.TNotebook", background="#090a0b", borderwidth=0)
+        colors = self.colors
+        style.configure(
+            ".",
+            background=colors["bg"],
+            foreground=colors["text"],
+            fieldbackground=colors["card"],
+        )
+        style.configure("TFrame", background=colors["bg"])
+        style.configure("Card.TFrame", background=colors["card"], relief="flat")
+        style.configure("Panel.TFrame", background=colors["panel"], relief="flat")
+        style.configure("TLabel", background=colors["bg"], foreground=colors["text"])
+        style.configure("Muted.TLabel", background=colors["bg"], foreground=colors["muted"])
+        style.configure("Card.TLabel", background=colors["card"], foreground=colors["text"])
+        style.configure(
+            "MutedCard.TLabel", background=colors["card"], foreground=colors["muted"]
+        )
+        style.configure(
+            "Metric.TLabel",
+            background=colors["card"],
+            foreground=colors["text"],
+            font=("Menlo", 24, "bold"),
+        )
+        style.configure(
+            "TButton",
+            background=colors["card_soft"],
+            foreground=colors["text"],
+            bordercolor=colors["line"],
+            padding=(10, 5),
+        )
+        style.configure(
+            "Accent.TButton",
+            background=colors["accent_dim"],
+            foreground=colors["text"],
+            bordercolor=colors["accent"],
+        )
+        style.map(
+            "TButton",
+            background=[("active", colors["line"])],
+            foreground=[("disabled", colors["muted"])],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=colors["panel"],
+            foreground=colors["text"],
+            bordercolor=colors["line"],
+            insertcolor=colors["text"],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=colors["panel"],
+            background=colors["card_soft"],
+            foreground=colors["text"],
+            bordercolor=colors["line"],
+            arrowcolor=colors["muted"],
+        )
+        style.configure("Dashboard.TNotebook", background=colors["bg"], borderwidth=0)
         style.configure(
             "Dashboard.TNotebook.Tab",
-            background="#101316",
-            foreground="#8f9b95",
+            background=colors["panel"],
+            foreground=colors["muted"],
             padding=(18, 9),
             font=("Helvetica", 11, "bold"),
         )
         style.map(
             "Dashboard.TNotebook.Tab",
-            background=[("selected", "#18211e")],
-            foreground=[("selected", "#eef4ef")],
+            background=[("selected", colors["card"])],
+            foreground=[("selected", colors["text"])],
         )
-        style.configure("Treeview", background="#0d0f10", fieldbackground="#0d0f10", foreground="#eef4ef", rowheight=24)
-        style.configure("Treeview.Heading", background="#171a1d", foreground="#8f9b95")
+        style.configure(
+            "Treeview",
+            background=colors["panel"],
+            fieldbackground=colors["panel"],
+            foreground=colors["text"],
+            bordercolor=colors["line"],
+            rowheight=27,
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=colors["card_soft"],
+            foreground=colors["muted"],
+            relief="flat",
+            font=("Helvetica", 10, "bold"),
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", colors["accent_dim"])],
+            foreground=[("selected", colors["text"])],
+        )
 
     def _build_layout(self) -> None:
         tk = self.tk
@@ -4081,7 +4254,7 @@ class DesktopDashboard:
         header.pack(fill="x", pady=(0, 10))
         title = ttk.Frame(header)
         title.pack(side="left")
-        ttk.Label(title, text="VOTE PARTY TRACKER", font=("Helvetica", 19, "bold")).pack(anchor="w")
+        ttk.Label(title, text="Vote Party Tracker", font=("Helvetica", 19, "bold")).pack(anchor="w")
         ttk.Label(title, textvariable=self.status_var, style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
         controls = ttk.Frame(header)
         controls.pack(side="right")
@@ -4127,7 +4300,9 @@ class DesktopDashboard:
         )
         flow_picker.pack(side="left", padx=(8, 0))
         flow_picker.bind("<<ComboboxSelected>>", lambda _event: self.redraw_flow())
-        self.canvas = tk.Canvas(flow, bg="#0b0d0f", highlightthickness=0, height=240)
+        self.canvas = tk.Canvas(
+            flow, bg=self.colors["graph_bg"], highlightthickness=0, height=240
+        )
         self.canvas.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         velocity = self._card(overview, "ETA Models", "rolling windows", "velocity")
@@ -4313,7 +4488,7 @@ class DesktopDashboard:
         frame = ttk.Frame(parent, style="Card.TFrame", padding=(10, 10))
         top = ttk.Frame(frame, style="Card.TFrame")
         top.pack(fill="x", pady=(0, 8))
-        ttk.Label(top, text=title.upper(), style="Card.TLabel", font=("Helvetica", 11, "bold")).pack(side="left")
+        ttk.Label(top, text=title, style="Card.TLabel", font=("Helvetica", 11, "bold")).pack(side="left")
         if popout_key:
             command = self.open_flow_popout if popout_key == "flow" else lambda key=popout_key, label=title: self.open_table_popout(key, label)
             ttk.Button(top, text="Pop Out", command=command).pack(side="right")
@@ -4341,6 +4516,8 @@ class DesktopDashboard:
         for column in columns:
             tree.heading(column, text=column)
             tree.column(column, width=110, anchor="w", stretch=True)
+        tree.tag_configure("even", background=self.colors["panel"])
+        tree.tag_configure("odd", background="#111a21")
         yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=yscroll.set)
         tree.pack(side="left", fill="both", expand=True)
@@ -4723,20 +4900,20 @@ class DesktopDashboard:
         window = self.tk.Toplevel(self.root)
         self.toast_window = window
         window.overrideredirect(True)
-        window.configure(bg="#111316")
+        window.configure(bg=self.colors["card"])
         try:
             window.attributes("-topmost", True)
             window.attributes("-alpha", 0.0)
         except Exception:
             pass
-        frame = self.tk.Frame(window, bg="#111316", padx=16, pady=14)
+        frame = self.tk.Frame(window, bg=self.colors["card"], padx=16, pady=14)
         frame.pack(fill="both", expand=True)
         title = "VOTE FOUND" if amount == 1 else "VOTES FOUND"
         self.tk.Label(
             frame,
             text=f"{title}  +{amount}",
-            bg="#111316",
-            fg="#72f0ba",
+            bg=self.colors["card"],
+            fg=self.colors["accent"],
             font=("Helvetica", 14, "bold"),
         ).pack(anchor="w")
         subtext = detail or "New vote activity detected"
@@ -4745,15 +4922,15 @@ class DesktopDashboard:
         self.tk.Label(
             frame,
             text=subtext[:120],
-            bg="#111316",
-            fg="#eef4ef",
+            bg=self.colors["card"],
+            fg=self.colors["text"],
             font=("Helvetica", 11),
             wraplength=420,
             justify="left",
         ).pack(anchor="w", pady=(4, 8))
-        bar = self.tk.Canvas(frame, height=4, bg="#20262a", highlightthickness=0)
+        bar = self.tk.Canvas(frame, height=4, bg=self.colors["line"], highlightthickness=0)
         bar.pack(fill="x")
-        rect = bar.create_rectangle(0, 0, 1, 4, fill="#72f0ba", outline="")
+        rect = bar.create_rectangle(0, 0, 1, 4, fill=self.colors["accent"], outline="")
         window.update_idletasks()
         width = max(window.winfo_width(), 360)
         height = max(window.winfo_height(), 92)
@@ -4826,8 +5003,13 @@ class DesktopDashboard:
     def _replace_rows(self, tree: Any, rows: list[tuple[Any, ...]]) -> None:
         for item in tree.get_children():
             tree.delete(item)
-        for row in rows:
-            tree.insert("", "end", values=tuple("" if value is None else value for value in row))
+        for index, row in enumerate(rows):
+            tree.insert(
+                "",
+                "end",
+                values=tuple("" if value is None else value for value in row),
+                tags=("odd" if index % 2 else "even",),
+            )
 
     def open_table_popout(self, table_name: str, title: str) -> None:
         existing = self.popout_tables.get(table_name)
@@ -4840,7 +5022,7 @@ class DesktopDashboard:
         window = self.tk.Toplevel(self.root)
         window.title(title)
         window.geometry("900x520")
-        window.configure(bg="#090a0b")
+        window.configure(bg=self.colors["bg"])
         frame = self.ttk.Frame(window, padding=12)
         frame.pack(fill="both", expand=True)
         tree = self._create_tree(frame, self.table_columns.get(table_name, ()), height=18)
@@ -4862,8 +5044,8 @@ class DesktopDashboard:
         window = self.tk.Toplevel(self.root)
         window.title("Vote Flow")
         window.geometry("1100x620")
-        window.configure(bg="#090a0b")
-        canvas = self.tk.Canvas(window, bg="#0b0d0f", highlightthickness=0)
+        window.configure(bg=self.colors["bg"])
+        canvas = self.tk.Canvas(window, bg=self.colors["graph_bg"], highlightthickness=0)
         canvas.pack(fill="both", expand=True, padx=12, pady=12)
         self.flow_popout_canvas = canvas
         window.protocol("WM_DELETE_WINDOW", lambda: self.close_flow_popout(window))
@@ -4902,17 +5084,18 @@ class DesktopDashboard:
     ) -> None:
         if canvas is None:
             return
+        colors = self.colors
         canvas.delete("all")
         width = max(canvas.winfo_width(), 400)
         height = max(canvas.winfo_height(), 180)
-        canvas.create_rectangle(0, 0, width, height, fill="#0b0d0f", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill=colors["graph_bg"], outline="")
         left = 42
         right = width - 16
         top = 20
         bottom = height - 42
         for idx in range(5):
             y = top + idx * ((bottom - top) / 4)
-            canvas.create_line(left, y, right, y, fill="#252a2e")
+            canvas.create_line(left, y, right, y, fill=colors["line"])
         if not cycles:
             return
         max_delta = max(1, *(int(cycle.get("total_delta") or 0) for cycle in cycles))
@@ -4926,7 +5109,7 @@ class DesktopDashboard:
                 bottom - bar_h,
                 x + max(1, min(8, step * 0.55)),
                 bottom,
-                fill="#f5c66a",
+                fill=colors["warning"],
                 outline="",
             )
         points: list[float] = []
@@ -4935,7 +5118,7 @@ class DesktopDashboard:
             y = top + (1 - (int(cycle.get("estimate_after") or 0) / max(1, party_size))) * (bottom - top)
             points.extend([x, y])
         if len(points) >= 4:
-            canvas.create_line(*points, fill="#72f0ba", width=2)
+            canvas.create_line(*points, fill=colors["accent"], width=2)
         cumulative = 0
         cumulative_points: list[float] = []
         total_votes = max(1, sum(int(cycle.get("total_delta") or 0) for cycle in cycles))
@@ -4945,12 +5128,18 @@ class DesktopDashboard:
             y = bottom - (cumulative / total_votes) * (bottom - top)
             cumulative_points.extend([x, y])
         if len(cumulative_points) >= 4:
-            canvas.create_line(*cumulative_points, fill="#7aa2f7", width=2)
-        canvas.create_text(left, 10, text=f"max delta {max_delta}", fill="#8f9b95", anchor="w")
-        canvas.create_text(right, 10, text=f"{len(cycles)} polls | {total_votes} votes", fill="#8f9b95", anchor="e")
-        canvas.create_text(left, bottom + 14, text="bars=delta", fill="#f5c66a", anchor="w")
-        canvas.create_text(left + 92, bottom + 14, text="green=VP", fill="#72f0ba", anchor="w")
-        canvas.create_text(left + 170, bottom + 14, text="blue=trend", fill="#7aa2f7", anchor="w")
+            canvas.create_line(*cumulative_points, fill=colors["blue"], width=2)
+        canvas.create_text(left, 10, text=f"max delta {max_delta}", fill=colors["muted"], anchor="w")
+        canvas.create_text(
+            right,
+            10,
+            text=f"{len(cycles)} polls | {total_votes} votes",
+            fill=colors["muted"],
+            anchor="e",
+        )
+        canvas.create_text(left, bottom + 14, text="bars=delta", fill=colors["warning"], anchor="w")
+        canvas.create_text(left + 92, bottom + 14, text="green=VP", fill=colors["accent"], anchor="w")
+        canvas.create_text(left + 170, bottom + 14, text="blue=trend", fill=colors["blue"], anchor="w")
         label_indexes = sorted(
             {
                 0,
@@ -4963,12 +5152,12 @@ class DesktopDashboard:
         for idx in label_indexes:
             cycle = cycles[idx]
             x = left + idx * step
-            canvas.create_line(x, bottom, x, bottom + 4, fill="#3a4146")
+            canvas.create_line(x, bottom, x, bottom + 4, fill=colors["line"])
             canvas.create_text(
                 x,
                 bottom + 28,
                 text=local_time_axis_label(cycle.get("ended_at")),
-                fill="#8f9b95",
+                fill=colors["muted"],
                 anchor="center",
                 font=("Menlo", 9),
             )
@@ -5141,6 +5330,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Print the dashboard statistics payload as JSON.",
     )
     parser.add_argument(
+        "--healthcheck",
+        action="store_true",
+        help="Print service health as JSON and exit non-zero if stale/unhealthy.",
+    )
+    parser.add_argument(
         "--gui",
         action="store_true",
         help="Run the native desktop dashboard.",
@@ -5205,6 +5399,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.stats:
             print(json.dumps(dashboard_to_dict(store.dashboard_snapshot()), indent=2))
 
+        if args.healthcheck:
+            return run_healthcheck(store, config)
+
         if args.once:
             run_once(store, config)
 
@@ -5241,6 +5438,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.calibrate is not None,
                 args.status,
                 args.stats,
+                args.healthcheck,
                 args.once,
                 args.daemon,
                 args.gui,
