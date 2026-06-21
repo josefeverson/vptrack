@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "vptrack_calibrator",
+  "version": "${version}",
+  "name": "VPTrack Calibrator",
+  "description": "Client-side chat listener that calibrates a local VP tracker from a visible Vote Party count.",
+  "authors": [
+    "vptrack"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.vptrack.calibrator.VpTrackCalibratorClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.17.3",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-message-api-v1": "*"
+  }
+}

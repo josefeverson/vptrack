@@ -4,6 +4,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 .tools/
+.tmp/
 *.egg-info/
 
 config.json
@@ -13,3 +14,6 @@ vp_tracker.sqlite3
 *.sqlite3-wal
 
 .DS_Store
+
+minecraft-vp-calibrator/.gradle/
+minecraft-vp-calibrator/build/
