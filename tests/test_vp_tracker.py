@@ -18,10 +18,34 @@ class ParserTests(unittest.TestCase):
             ),
             ("votes_heading_count", "Votes\n3564", 3564),
             ("recent_votes_count", "Recent votes\n2772 in June, 33727 total", 2772),
+            ("votes_all_time", "76975 Votes - All time", 76975),
+            ("total_votes_phrase", "33819 total votes", 33819),
         ]
         for parser_name, text, expected in cases:
             parsed = vp_tracker.parse_count_source(parser_name, text)
             self.assertEqual(parsed.count, expected)
+
+    def test_total_check_statuses(self):
+        self.assertEqual(
+            vp_tracker.total_check_status(1, 1, 1001, "votes_all_time"),
+            "matched",
+        )
+        self.assertEqual(
+            vp_tracker.total_check_status(1, 0, 1000, "votes_all_time"),
+            "lagging",
+        )
+        self.assertEqual(
+            vp_tracker.total_check_status(1, 3, 1003, "votes_all_time"),
+            "mismatch",
+        )
+        self.assertEqual(
+            vp_tracker.total_check_status(0, 2, 1002, "votes_all_time"),
+            "total-only",
+        )
+        self.assertEqual(
+            vp_tracker.total_check_status(1, 1, 1001, ""),
+            "primary",
+        )
 
     def test_recent_username_date_pairs(self):
         text = """Last 10 Voters

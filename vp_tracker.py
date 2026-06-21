@@ -120,6 +120,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "url": "https://example.invalid/vote-source-1",
             "type": "count",
             "parser": "votes_this_month",
+            "total_parser": "",
             "recent_parser": "",
             "fetcher": "http",
             "fallback_fetcher": "",
@@ -131,6 +132,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "url": "https://example.invalid/vote-source-2",
             "type": "count",
             "parser": "vote_s_count",
+            "total_parser": "",
             "recent_parser": "",
             "fetcher": "http",
             "fallback_fetcher": "",
@@ -142,6 +144,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "url": "https://example.invalid/vote-source-3",
             "type": "count",
             "parser": "players_have_voted",
+            "total_parser": "",
             "recent_parser": "",
             "fetcher": "http",
             "fallback_fetcher": "",
@@ -153,6 +156,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "url": "https://example.invalid/vote-source-4",
             "type": "count",
             "parser": "votes_heading_count",
+            "total_parser": "",
             "recent_parser": "",
             "fetcher": "http",
             "fallback_fetcher": "",
@@ -164,6 +168,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "url": "https://example.invalid/recent-voters",
             "type": "recent",
             "parser": "recent_username_dates",
+            "total_parser": "",
             "recent_parser": "",
             "fetcher": "http",
             "fallback_fetcher": "",
@@ -175,6 +180,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "url": "https://example.invalid/recent-total",
             "type": "count",
             "parser": "recent_votes_count",
+            "total_parser": "",
             "recent_parser": "recent_username_dates",
             "fetcher": "http",
             "fallback_fetcher": "",
@@ -195,6 +201,8 @@ COUNT_PARSERS: dict[str, re.Pattern[str]] = {
     "recent_votes_count": re.compile(
         r"Recent\s+votes\s+([\d,]+)\s+in\s+\w+", re.IGNORECASE
     ),
+    "votes_all_time": re.compile(r"([\d,]+)\s+Votes\s*-\s*All\s*time", re.IGNORECASE),
+    "total_votes_phrase": re.compile(r"([\d,]+)\s+total\s+votes\b", re.IGNORECASE),
 }
 
 VP_CHAT_RE = re.compile(r"VP-count;\s*(\d+)\s*/\s*(\d+)\s*!", re.IGNORECASE)
@@ -287,7 +295,9 @@ class PollSourceResult:
     name: str
     success: bool
     count: int | None = None
+    total_count: int | None = None
     delta: int = 0
+    total_delta: int | None = None
     new_events: int = 0
     reset_detected: bool = False
     skipped: bool = False
@@ -297,6 +307,7 @@ class PollSourceResult:
     raw_delta: int | None = None
     suppressed_delta: int = 0
     adjustment_note: str = ""
+    total_check_status: str = "unavailable"
 
 
 @dataclass
@@ -700,8 +711,10 @@ class Store:
               fetcher TEXT,
               fallback_fetcher TEXT,
               date_timezone TEXT,
+              total_parser TEXT,
               enabled INTEGER NOT NULL DEFAULT 1,
               last_count INTEGER,
+              last_total_count INTEGER,
               last_checked_at TEXT,
               failure_count INTEGER NOT NULL DEFAULT 0,
               next_allowed_at TEXT
@@ -711,6 +724,7 @@ class Store:
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               source_name TEXT NOT NULL,
               count INTEGER,
+              total_count INTEGER,
               raw_summary TEXT,
               checked_at TEXT NOT NULL,
               success INTEGER NOT NULL,
@@ -784,12 +798,15 @@ class Store:
               success INTEGER NOT NULL,
               skipped INTEGER NOT NULL DEFAULT 0,
               count INTEGER,
+              total_count INTEGER,
               delta INTEGER NOT NULL DEFAULT 0,
+              total_delta INTEGER,
               raw_delta INTEGER NOT NULL DEFAULT 0,
               suppressed_delta INTEGER NOT NULL DEFAULT 0,
               new_events INTEGER NOT NULL DEFAULT 0,
               reset_detected INTEGER NOT NULL DEFAULT 0,
               fetcher_used TEXT,
+              total_check_status TEXT,
               adjustment_note TEXT,
               error TEXT,
               raw_summary TEXT,
@@ -834,7 +851,13 @@ class Store:
         self.ensure_column("vote_sources", "fetcher", "TEXT")
         self.ensure_column("vote_sources", "fallback_fetcher", "TEXT")
         self.ensure_column("vote_sources", "date_timezone", "TEXT")
+        self.ensure_column("vote_sources", "total_parser", "TEXT")
+        self.ensure_column("vote_sources", "last_total_count", "INTEGER")
         self.ensure_column("vote_events", "vote_time_utc", "TEXT")
+        self.ensure_column("vote_snapshots", "total_count", "INTEGER")
+        self.ensure_column("source_poll_results", "total_count", "INTEGER")
+        self.ensure_column("source_poll_results", "total_delta", "INTEGER")
+        self.ensure_column("source_poll_results", "total_check_status", "TEXT")
         self.ensure_column("source_poll_results", "fetcher_used", "TEXT")
         self.ensure_column("source_poll_results", "raw_delta", "INTEGER NOT NULL DEFAULT 0")
         self.ensure_column(
@@ -904,14 +927,15 @@ class Store:
             self.conn.execute(
                 """
                 INSERT INTO vote_sources(
-                  name, url, type, parser, recent_parser, fetcher,
+                  name, url, type, parser, total_parser, recent_parser, fetcher,
                   fallback_fetcher, date_timezone, enabled
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                   url = excluded.url,
                   type = excluded.type,
                   parser = excluded.parser,
+                  total_parser = excluded.total_parser,
                   recent_parser = excluded.recent_parser,
                   fetcher = excluded.fetcher,
                   fallback_fetcher = excluded.fallback_fetcher,
@@ -923,6 +947,7 @@ class Store:
                     source["url"],
                     source["type"],
                     source["parser"],
+                    source.get("total_parser", ""),
                     source.get("recent_parser", ""),
                     source.get("fetcher", "http"),
                     source.get("fallback_fetcher", ""),
@@ -1126,6 +1151,7 @@ class Store:
         self,
         source_name: str,
         count: int | None,
+        total_count: int | None,
         raw_summary: str,
         success: bool,
         error: str = "",
@@ -1133,15 +1159,17 @@ class Store:
         self.conn.execute(
             """
             INSERT INTO vote_snapshots(
-              source_name, count, raw_summary, checked_at, success, error
+              source_name, count, total_count, raw_summary, checked_at, success, error
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (source_name, count, raw_summary, iso(), 1 if success else 0, error),
+            (source_name, count, total_count, raw_summary, iso(), 1 if success else 0, error),
         )
 
-    def update_source_success(self, source_name: str, count: int | None) -> None:
-        if count is None:
+    def update_source_success(
+        self, source_name: str, count: int | None, total_count: int | None = None
+    ) -> None:
+        if count is None and total_count is None:
             self.conn.execute(
                 """
                 UPDATE vote_sources
@@ -1150,7 +1178,19 @@ class Store:
                 """,
                 (iso(), source_name),
             )
-        else:
+        elif count is None:
+            self.conn.execute(
+                """
+                UPDATE vote_sources
+                SET last_total_count = ?,
+                    last_checked_at = ?,
+                    failure_count = 0,
+                    next_allowed_at = NULL
+                WHERE name = ?
+                """,
+                (total_count, iso(), source_name),
+            )
+        elif total_count is None:
             self.conn.execute(
                 """
                 UPDATE vote_sources
@@ -1161,6 +1201,19 @@ class Store:
                 WHERE name = ?
                 """,
                 (count, iso(), source_name),
+            )
+        else:
+            self.conn.execute(
+                """
+                UPDATE vote_sources
+                SET last_count = ?,
+                    last_total_count = ?,
+                    last_checked_at = ?,
+                    failure_count = 0,
+                    next_allowed_at = NULL
+                WHERE name = ?
+                """,
+                (count, total_count, iso(), source_name),
             )
 
     def update_source_failure(self, source: sqlite3.Row) -> None:
@@ -1237,10 +1290,11 @@ class Store:
                 """
                 INSERT INTO source_poll_results(
                   poll_cycle_id, source_name, checked_at, success, skipped, count,
-                  delta, raw_delta, suppressed_delta, new_events, reset_detected,
-                  fetcher_used, adjustment_note, error, raw_summary
+                  total_count, delta, total_delta, raw_delta, suppressed_delta,
+                  new_events, reset_detected, fetcher_used, total_check_status,
+                  adjustment_note, error, raw_summary
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cycle_id,
@@ -1249,7 +1303,9 @@ class Store:
                     1 if source_result.success else 0,
                     1 if source_result.skipped else 0,
                     source_result.count,
+                    source_result.total_count,
                     source_result.delta,
+                    source_result.total_delta,
                     source_result.raw_delta
                     if source_result.raw_delta is not None
                     else source_result.delta,
@@ -1257,6 +1313,7 @@ class Store:
                     source_result.new_events,
                     1 if source_result.reset_detected else 0,
                     source_result.fetcher_used,
+                    source_result.total_check_status,
                     source_result.adjustment_note,
                     source_result.error,
                     source_result.raw_summary,
@@ -1509,7 +1566,8 @@ class Store:
         return list(
             self.conn.execute(
                 """
-                SELECT source_name, count, raw_summary, checked_at, success, error
+                SELECT source_name, count, total_count, raw_summary, checked_at,
+                       success, error
                 FROM vote_snapshots
                 ORDER BY id DESC
                 LIMIT ?
@@ -1522,7 +1580,8 @@ class Store:
         return list(
             self.conn.execute(
                 """
-                SELECT name, url, type, parser, enabled, last_count, last_checked_at,
+                SELECT name, url, type, parser, total_parser, enabled,
+                       last_count, last_total_count, last_checked_at,
                        recent_parser, fetcher, fallback_fetcher, date_timezone,
                        failure_count, next_allowed_at
                 FROM vote_sources
@@ -1550,9 +1609,11 @@ class Store:
         return list(
             self.conn.execute(
                 """
-                SELECT source_name, checked_at, success, skipped, count, delta,
-                       raw_delta, suppressed_delta, new_events, reset_detected,
-                       fetcher_used, adjustment_note, error, raw_summary
+                SELECT source_name, checked_at, success, skipped, count,
+                       total_count, delta, total_delta, raw_delta,
+                       suppressed_delta, new_events, reset_detected,
+                       fetcher_used, total_check_status, adjustment_note,
+                       error, raw_summary
                 FROM source_poll_results
                 ORDER BY id DESC
                 LIMIT ?
@@ -1587,6 +1648,11 @@ class Store:
               SUM(CASE WHEN success = 0 AND skipped = 0 THEN 1 ELSE 0 END) AS failed_polls,
               SUM(CASE WHEN fetcher_used = 'reader' THEN 1 ELSE 0 END) AS reader_polls,
               COALESCE(SUM(delta), 0) AS votes,
+              SUM(CASE WHEN total_check_status = 'matched' THEN 1 ELSE 0 END) AS total_matched_polls,
+              SUM(CASE WHEN total_check_status = 'primary' THEN 1 ELSE 0 END) AS total_primary_polls,
+              SUM(CASE WHEN total_check_status = 'mismatch' THEN 1 ELSE 0 END) AS total_mismatch_polls,
+              SUM(CASE WHEN total_check_status = 'lagging' THEN 1 ELSE 0 END) AS total_lagging_polls,
+              SUM(CASE WHEN total_check_status = 'total-only' THEN 1 ELSE 0 END) AS total_only_polls,
               COALESCE(MAX(delta), 0) AS max_delta,
               COALESCE(SUM(reset_detected), 0) AS resets,
               MAX(checked_at) AS last_seen
@@ -1611,6 +1677,11 @@ class Store:
                     "reader_polls": int(row["reader_polls"] or 0),
                     "success_rate": ok / polls if polls else 0.0,
                     "votes": int(row["votes"] or 0),
+                    "total_matched_polls": int(row["total_matched_polls"] or 0),
+                    "total_primary_polls": int(row["total_primary_polls"] or 0),
+                    "total_mismatch_polls": int(row["total_mismatch_polls"] or 0),
+                    "total_lagging_polls": int(row["total_lagging_polls"] or 0),
+                    "total_only_polls": int(row["total_only_polls"] or 0),
                     "max_delta": int(row["max_delta"] or 0),
                     "resets": int(row["resets"] or 0),
                     "last_seen": row["last_seen"],
@@ -1645,6 +1716,11 @@ class Store:
               COALESCE(SUM(CASE WHEN (CASE WHEN COALESCE(spr.raw_delta, 0) > 0 THEN spr.raw_delta ELSE spr.delta END) > 1 THEN (CASE WHEN COALESCE(spr.raw_delta, 0) > 0 THEN spr.raw_delta ELSE spr.delta END) ELSE 0 END), 0) AS catchup_votes,
               SUM(CASE WHEN spr.delta > 0 AND cycle_positive.positive_sources = 1 THEN 1 ELSE 0 END) AS solo_polls,
               COALESCE(SUM(CASE WHEN spr.delta > 0 AND cycle_positive.positive_sources = 1 THEN spr.delta ELSE 0 END), 0) AS solo_votes,
+              SUM(CASE WHEN spr.total_check_status = 'matched' THEN 1 ELSE 0 END) AS total_matched_polls,
+              SUM(CASE WHEN spr.total_check_status = 'primary' THEN 1 ELSE 0 END) AS total_primary_polls,
+              SUM(CASE WHEN spr.total_check_status = 'mismatch' THEN 1 ELSE 0 END) AS total_mismatch_polls,
+              SUM(CASE WHEN spr.total_check_status = 'lagging' THEN 1 ELSE 0 END) AS total_lagging_polls,
+              SUM(CASE WHEN spr.total_check_status = 'total-only' THEN 1 ELSE 0 END) AS total_only_polls,
               MAX(CASE WHEN spr.success = 1 THEN spr.checked_at ELSE NULL END) AS last_success_at,
               MAX(CASE WHEN spr.success = 0 AND spr.skipped = 0 THEN spr.checked_at ELSE NULL END) AS last_failure_at,
               MAX(CASE WHEN spr.skipped = 1 THEN spr.checked_at ELSE NULL END) AS last_skip_at
@@ -1687,6 +1763,8 @@ class Store:
                 health_score -= ((failed + skipped) / polls) * 45.0
             health_score -= min(float(row["catchup_polls"] or 0) * 3.0, 20.0)
             health_score -= min(solo_polls * 1.5, 15.0)
+            health_score -= min(float(row["total_mismatch_polls"] or 0) * 5.0, 20.0)
+            health_score -= min(float(row["total_lagging_polls"] or 0) * 2.0, 12.0)
             if stale_seconds and stale_seconds > 900:
                 health_score -= min((stale_seconds - 900) / 60.0, 20.0)
             diagnostics.append(
@@ -1708,6 +1786,11 @@ class Store:
                     "solo_votes": int(row["solo_votes"] or 0),
                     "catchup_polls": int(row["catchup_polls"] or 0),
                     "catchup_votes": int(row["catchup_votes"] or 0),
+                    "total_matched_polls": int(row["total_matched_polls"] or 0),
+                    "total_primary_polls": int(row["total_primary_polls"] or 0),
+                    "total_mismatch_polls": int(row["total_mismatch_polls"] or 0),
+                    "total_lagging_polls": int(row["total_lagging_polls"] or 0),
+                    "total_only_polls": int(row["total_only_polls"] or 0),
                     "last_success_at": row["last_success_at"],
                     "last_failure_at": row["last_failure_at"],
                     "last_skip_at": row["last_skip_at"],
@@ -1767,6 +1850,16 @@ class Store:
                      CASE
                        WHEN (CASE WHEN COALESCE(spr.raw_delta, 0) > 0 THEN spr.raw_delta ELSE spr.delta END) > 0
                          THEN spr.source_name || ':' || spr.delta ||
+                              CASE
+                                WHEN COALESCE(spr.total_check_status, '') NOT IN ('', 'unavailable')
+                                  THEN ' ' || spr.total_check_status ||
+                                       CASE
+                                         WHEN spr.total_delta IS NOT NULL
+                                           THEN ' total' || CASE WHEN spr.total_delta >= 0 THEN '+' ELSE '' END || spr.total_delta
+                                         ELSE ''
+                                       END
+                                ELSE ''
+                              END ||
                               CASE
                                 WHEN COALESCE(spr.suppressed_delta, 0) > 0
                                   THEN ' raw' || (CASE WHEN COALESCE(spr.raw_delta, 0) > 0 THEN spr.raw_delta ELSE spr.delta END)
@@ -2137,12 +2230,14 @@ class Store:
                     "name": row["name"],
                     "type": row["type"],
                     "parser": row["parser"],
+                    "total_parser": row["total_parser"] or "",
                     "recent_parser": row["recent_parser"],
                     "fetcher": row["fetcher"] or "http",
                     "fallback_fetcher": row["fallback_fetcher"] or "",
                     "date_timezone": row["date_timezone"] or "local",
                     "enabled": bool(row["enabled"]),
                     "last_count": row["last_count"],
+                    "last_total_count": row["last_total_count"],
                     "last_checked_at": row["last_checked_at"],
                     "failure_count": int(row["failure_count"] or 0),
                     "next_allowed_at": row["next_allowed_at"],
@@ -2561,6 +2656,7 @@ def poll_sources(store: Store, config: dict[str, Any]) -> PollCycleResult:
 
         reconcile_inferred_source_deltas(store, config, results)
         apply_delta_safety(config, results)
+        finalize_total_checks(results)
         large_delta_warning = int(config["confidence"]["large_delta_warning"])
         resets = sum(1 for result in results if result.reset_detected)
         large_jumps = sum(1 for result in results if result.delta > large_delta_warning)
@@ -2707,6 +2803,97 @@ def apply_delta_safety(config: dict[str, Any], results: list[PollSourceResult]) 
     append_adjustment_note(result, f"capped single-source burst {raw_delta}->{limit}")
 
 
+def total_check_status(
+    evidence_delta: int,
+    total_delta: int | None,
+    total_count: int | None,
+    total_parser: str,
+    reset_detected: bool = False,
+    parse_error: str = "",
+) -> str:
+    if parse_error:
+        return "error"
+    if not total_parser:
+        return "primary" if total_count is not None else "unavailable"
+    if total_count is None:
+        return "unavailable"
+    if reset_detected:
+        return "reset"
+    if total_delta is None:
+        return "baseline"
+    if evidence_delta > 0:
+        if total_delta == evidence_delta:
+            return "matched"
+        if total_delta == 0:
+            return "lagging"
+        return "mismatch"
+    if total_delta > 0:
+        return "total-only"
+    return "steady"
+
+
+def append_total_check_note(result: PollSourceResult) -> None:
+    if result.total_check_status in {"unavailable", "steady", "baseline"}:
+        return
+    if (
+        result.total_check_status == "primary"
+        and result.delta <= 0
+        and (result.total_delta is None or result.total_delta <= 0)
+    ):
+        return
+    if result.total_delta is None:
+        detail = result.total_check_status
+    else:
+        detail = f"{result.total_check_status} total_delta={result.total_delta}"
+    append_adjustment_note(result, f"total check {detail}")
+
+
+def finalize_total_checks(results: list[PollSourceResult]) -> None:
+    for result in results:
+        if not result.success:
+            continue
+        if result.total_check_status not in {
+            "error",
+            "unavailable",
+            "baseline",
+            "reset",
+            "primary",
+        }:
+            result.total_check_status = total_check_status(
+                result.delta,
+                result.total_delta,
+                result.total_count,
+                "configured",
+            )
+        append_total_check_note(result)
+
+
+def parse_total_counter(
+    source: sqlite3.Row | dict[str, Any],
+    visible_text: str,
+    html: str,
+    primary_count: int | None,
+) -> tuple[int | None, int | None, str, str]:
+    total_parser = str(source_value(source, "total_parser", "") or "")
+    previous_total = source_value(source, "last_total_count")
+    parse_error = ""
+    total_count: int | None = None
+    total_delta: int | None = None
+
+    if total_parser:
+        try:
+            parsed_total = parse_count_source(total_parser, visible_text, html)
+            total_count = parsed_total.count
+        except Exception as exc:
+            parse_error = friendly_error(exc)
+    elif primary_count is not None:
+        total_count = primary_count
+
+    if total_count is not None and previous_total is not None:
+        total_delta = total_count - int(previous_total)
+    return total_count, total_delta, total_parser, parse_error
+
+
 def poll_single_source(
     store: Store, config: dict[str, Any], source: sqlite3.Row
 ) -> PollSourceResult:
@@ -2746,19 +2933,37 @@ def poll_single_source(
                 date_timezone,
                 reference_dt,
             )
-            store.insert_snapshot(name, parsed.count, parsed.raw_summary, True)
-            store.update_source_success(name, parsed.count)
+            total_count, total_delta, total_parser, total_error = parse_total_counter(
+                source, visible_text, html, parsed.count
+            )
+            total_reset = total_delta is not None and total_delta < 0
+            status = total_check_status(
+                delta,
+                total_delta,
+                total_count,
+                total_parser,
+                total_reset,
+                total_error,
+            )
+            store.insert_snapshot(name, parsed.count, total_count, parsed.raw_summary, True)
+            store.update_source_success(name, parsed.count, total_count)
             store.conn.commit()
-            return PollSourceResult(
+            result = PollSourceResult(
                 name=name,
                 success=True,
                 count=parsed.count,
+                total_count=total_count,
                 delta=delta,
+                total_delta=total_delta,
                 new_events=new_events,
                 reset_detected=reset_detected,
                 raw_summary=parsed.raw_summary,
                 fetcher_used=fetcher_used,
+                total_check_status=status,
             )
+            if total_error:
+                append_adjustment_note(result, f"total parser failed: {total_error}")
+            return result
 
         parsed = parse_recent_source(
             name, str(source["parser"]), visible_text, date_timezone, reference_dt
@@ -2769,20 +2974,38 @@ def poll_single_source(
             if store.insert_event(name, event):
                 new_events += 1
         delta = 0 if is_baseline else new_events
-        store.insert_snapshot(name, None, parsed.raw_summary, True)
-        store.update_source_success(name, None)
+        total_count, total_delta, total_parser, total_error = parse_total_counter(
+            source, visible_text, html, None
+        )
+        total_reset = total_delta is not None and total_delta < 0
+        status = total_check_status(
+            delta,
+            total_delta,
+            total_count,
+            total_parser,
+            total_reset,
+            total_error,
+        )
+        store.insert_snapshot(name, None, total_count, parsed.raw_summary, True)
+        store.update_source_success(name, None, total_count)
         store.conn.commit()
-        return PollSourceResult(
+        result = PollSourceResult(
             name=name,
             success=True,
+            total_count=total_count,
             delta=delta,
+            total_delta=total_delta,
             new_events=new_events,
             raw_summary=parsed.raw_summary,
             fetcher_used=fetcher_used,
+            total_check_status=status,
         )
+        if total_error:
+            append_adjustment_note(result, f"total parser failed: {total_error}")
+        return result
     except Exception as exc:
         error = friendly_error(exc)
-        store.insert_snapshot(name, None, "", False, error)
+        store.insert_snapshot(name, None, None, "", False, error)
         store.update_source_failure(source)
         store.conn.commit()
         return PollSourceResult(
@@ -3412,8 +3635,9 @@ def print_status(store: Store, config: dict[str, Any]) -> None:
     for row in store.latest_snapshots(12):
         status = "ok" if row["success"] else "fail"
         count = "" if row["count"] is None else f" count={row['count']}"
+        total = "" if row["total_count"] is None else f" total={row['total_count']}"
         detail = row["raw_summary"] or row["error"] or ""
-        print(f"- {row['checked_at']} {row['source_name']} {status}{count} {detail}")
+        print(f"- {row['checked_at']} {row['source_name']} {status}{count}{total} {detail}")
 
 
 def healthcheck_payload(store: Store, config: dict[str, Any]) -> dict[str, Any]:
@@ -3526,6 +3750,13 @@ def run_daemon(store: Store, config: dict[str, Any]) -> None:
                     detail += f", raw_delta={source_result.raw_delta}, suppressed={source_result.suppressed_delta}"
                 if source_result.count is not None:
                     detail += f", count={source_result.count}"
+                if source_result.total_count is not None:
+                    detail += (
+                        f", total_count={source_result.total_count}"
+                        f", total_check={source_result.total_check_status}"
+                    )
+                    if source_result.total_delta is not None:
+                        detail += f", total_delta={source_result.total_delta}"
                 if source_result.new_events:
                     detail += f", new_events={source_result.new_events}"
                 if source_result.fetcher_used and source_result.fetcher_used != "http":
@@ -3558,6 +3789,11 @@ def run_once(store: Store, config: dict[str, Any]) -> None:
             pieces = [f"{source_result.name}: ok"]
             if source_result.count is not None:
                 pieces.append(f"count={source_result.count}")
+            if source_result.total_count is not None:
+                pieces.append(f"total_count={source_result.total_count}")
+                pieces.append(f"total_check={source_result.total_check_status}")
+                if source_result.total_delta is not None:
+                    pieces.append(f"total_delta={source_result.total_delta}")
             if source_result.delta:
                 pieces.append(f"delta={source_result.delta}")
             if source_result.suppressed_delta:
@@ -4360,7 +4596,7 @@ class DesktopDashboard:
         sources.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(10, 8))
         self.tables["sources"] = self._table(
             sources,
-            ("Source", "Votes", "OK", "Fail", "Skip", "Reader", "Reliability"),
+            ("Source", "Votes", "OK", "Fail", "Skip", "Reader", "Total", "Reliability"),
             "sources",
             "Source Mix",
         )
@@ -4369,7 +4605,7 @@ class DesktopDashboard:
         diagnostics.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=(10, 8))
         self.tables["diagnostics"] = self._table(
             diagnostics,
-            ("Source", "OK%", "Fail", "Skip", "Solo", "Catchup", "Suppressed", "Stale", "Score"),
+            ("Source", "OK%", "Fail", "Skip", "Solo", "Catchup", "Suppressed", "Stale", "Total", "Score"),
             "diagnostics",
             "Source Diagnostics",
         )
@@ -4654,6 +4890,24 @@ class DesktopDashboard:
             parts.append(f"{self.source_label(source_name)}:{rest}")
         return ", ".join(parts)
 
+    def total_check_label(self, row: dict[str, Any]) -> str:
+        matched = int(row.get("total_matched_polls") or 0)
+        primary = int(row.get("total_primary_polls") or 0)
+        mismatch = int(row.get("total_mismatch_polls") or 0)
+        lagging = int(row.get("total_lagging_polls") or 0)
+        total_only = int(row.get("total_only_polls") or 0)
+        issues = mismatch + lagging + total_only
+        parts = []
+        if matched:
+            parts.append(f"{matched} match")
+        if primary:
+            parts.append(f"{primary} primary")
+        if issues:
+            parts.append(f"{issues} issue")
+        if not parts:
+            return "--"
+        return " / ".join(parts)
+
     def render(self, payload: dict[str, Any]) -> None:
         self.notify_vote_found(payload)
         self.latest_payload = payload
@@ -4700,6 +4954,7 @@ class DesktopDashboard:
                     row["failed_polls"],
                     row["skipped_polls"],
                     row["reader_polls"],
+                    self.total_check_label(row),
                     f"{round(row['success_rate'] * 100)}%",
                 )
                 for row in stats["source_mix"]["last_24h"]
@@ -4776,6 +5031,10 @@ class DesktopDashboard:
         worst_diag = min(diagnostics, key=lambda row: row["health_score"]) if diagnostics else {}
         solo_votes = sum(int(row["solo_votes"]) for row in diagnostics)
         catchup_votes = sum(int(row["catchup_votes"]) for row in diagnostics)
+        total_mismatch = sum(int(row["total_mismatch_polls"]) for row in diagnostics)
+        total_primary = sum(int(row["total_primary_polls"]) for row in diagnostics)
+        total_lagging = sum(int(row["total_lagging_polls"]) for row in diagnostics)
+        total_only = sum(int(row["total_only_polls"]) for row in diagnostics)
         advanced_rows = [
             ("Auto-join", "ON" if state["auto_join_enabled"] else "OFF"),
             ("Next poll", format_duration(state.get("next_poll_seconds"))),
@@ -4800,6 +5059,10 @@ class DesktopDashboard:
             ("Worst source score", f"{round(worst_diag.get('health_score', 0))}%" if worst_diag else "--"),
             ("Solo-source votes", solo_votes),
             ("Catchup votes", catchup_votes),
+            ("Primary-only total checks", total_primary),
+            ("Total mismatches", total_mismatch),
+            ("Total lagging", total_lagging),
+            ("Total-only movement", total_only),
             ("Source issues 7d", stats["source_debug"]["issues_7d_count"]),
         ]
         self._set_rows("advanced", advanced_rows)
@@ -4821,6 +5084,7 @@ class DesktopDashboard:
                     row["catchup_votes"],
                     row["suppressed_votes"],
                     format_duration(row["stale_seconds"]),
+                    self.total_check_label(row),
                     f"{round(row['health_score'])}%",
                 )
                 for row in diagnostics
