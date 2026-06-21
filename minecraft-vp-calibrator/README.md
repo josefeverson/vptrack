@@ -31,3 +31,5 @@ Set `calibrationCommand` to a local command where `{count}` is replaced with the
 ```
 
 The parser accepts any message containing Vote Party text and a count like `47/120`.
+
+The config is reloaded each time you send `/voteparty`, so changing the command or patterns only requires re-running `/voteparty`. Replacing the mod jar itself still requires a Minecraft restart.

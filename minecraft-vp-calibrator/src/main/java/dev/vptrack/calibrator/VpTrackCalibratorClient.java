@@ -38,10 +38,12 @@ public final class VpTrackCalibratorClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        config = Config.load();
-        messagePatterns = compilePatterns(config);
+        reloadConfig();
 
         ClientSendMessageEvents.COMMAND.register(command -> {
+            if (isVotePartyCommand(command)) {
+                reloadConfig();
+            }
             if (config.enabled && isVotePartyCommand(command)) {
                 armListener();
             }
@@ -50,6 +52,11 @@ public final class VpTrackCalibratorClient implements ClientModInitializer {
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> scanMessage(message));
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> scanMessage(message));
         LOGGER.info("VPTrack calibrator initialized as a client-side listener.");
+    }
+
+    private void reloadConfig() {
+        config = Config.load();
+        messagePatterns = compilePatterns(config);
     }
 
     private boolean isVotePartyCommand(String command) {
@@ -117,8 +124,16 @@ public final class VpTrackCalibratorClient implements ClientModInitializer {
 
     private void runCalibration(int count, String rawMessage) {
         if (config.calibrationCommand == null || config.calibrationCommand.isEmpty()) {
-            LOGGER.warn("VPTrack calibrator found {}/{} but calibrationCommand is empty.", count, config.partySize);
-            showClientMessage("VPTrack found " + count + "/" + config.partySize + ", but no calibration command is configured.");
+            LOGGER.warn(
+                "VPTrack calibrator found {}/{} but calibrationCommand is empty in {}.",
+                count,
+                config.partySize,
+                Config.path()
+            );
+            showClientMessage(
+                "VPTrack found " + count + "/" + config.partySize
+                    + ", but no calibration command is configured."
+            );
             return;
         }
 
@@ -205,7 +220,7 @@ public final class VpTrackCalibratorClient implements ClientModInitializer {
         );
 
         static Config load() {
-            Path path = FabricLoader.getInstance().getConfigDir().resolve(CONFIG_FILE);
+            Path path = path();
             if (Files.exists(path)) {
                 try {
                     Config loaded = GSON.fromJson(Files.readString(path), Config.class);
@@ -225,6 +240,10 @@ public final class VpTrackCalibratorClient implements ClientModInitializer {
                 LOGGER.warn("Could not write VPTrack calibrator default config.", e);
             }
             return defaults;
+        }
+
+        static Path path() {
+            return FabricLoader.getInstance().getConfigDir().resolve(CONFIG_FILE);
         }
 
         Config withDefaults() {
