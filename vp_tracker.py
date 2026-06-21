@@ -4131,7 +4131,9 @@ class DesktopDashboard:
         self.table_columns: dict[str, tuple[str, ...]] = {}
         self.table_titles: dict[str, str] = {}
         self.popout_tables: dict[str, Any] = {}
+        self.metric_frames: dict[str, Any] = {}
         self.canvas = None
+        self.progress_canvas = None
         self.flow_popout_canvas = None
         self.toast_window = None
         self.last_seen_cycle_id: int | None = None
@@ -4141,6 +4143,15 @@ class DesktopDashboard:
         self.poll_interval_var = tk.StringVar()
         self.flow_window_var = tk.StringVar(value="24h")
         self.status_var = tk.StringVar(value="Starting")
+        self.hero_vars = {
+            "estimate": tk.StringVar(value="--/120"),
+            "remaining": tk.StringVar(value="-- remaining"),
+            "eta": tk.StringVar(value="ETA --"),
+            "status": tk.StringVar(value="Waiting for first snapshot"),
+            "confidence": tk.StringVar(value="confidence --"),
+            "poll": tk.StringVar(value="next poll --"),
+            "sources": tk.StringVar(value="sources --"),
+        }
         self.poll_interval_entry = None
         self._build_style()
         self._build_layout()
@@ -4162,18 +4173,32 @@ class DesktopDashboard:
         )
         style.configure("TFrame", background=colors["bg"])
         style.configure("Card.TFrame", background=colors["card"], relief="flat")
+        style.configure("Hero.TFrame", background=colors["card"], relief="flat")
+        style.configure("MetricCard.TFrame", background=colors["card_soft"], relief="flat")
         style.configure("Panel.TFrame", background=colors["panel"], relief="flat")
         style.configure("TLabel", background=colors["bg"], foreground=colors["text"])
         style.configure("Muted.TLabel", background=colors["bg"], foreground=colors["muted"])
         style.configure("Card.TLabel", background=colors["card"], foreground=colors["text"])
+        style.configure("Hero.TLabel", background=colors["card"], foreground=colors["text"])
+        style.configure("HeroMuted.TLabel", background=colors["card"], foreground=colors["muted"])
+        style.configure("MetricCard.TLabel", background=colors["card_soft"], foreground=colors["text"])
+        style.configure(
+            "MutedMetric.TLabel", background=colors["card_soft"], foreground=colors["muted"]
+        )
         style.configure(
             "MutedCard.TLabel", background=colors["card"], foreground=colors["muted"]
         )
         style.configure(
-            "Metric.TLabel",
+            "HeroValue.TLabel",
             background=colors["card"],
             foreground=colors["text"],
-            font=("Menlo", 24, "bold"),
+            font=("Menlo", 42, "bold"),
+        )
+        style.configure(
+            "Metric.TLabel",
+            background=colors["card_soft"],
+            foreground=colors["text"],
+            font=("Menlo", 20, "bold"),
         )
         style.configure(
             "TButton",
@@ -4270,12 +4295,7 @@ class DesktopDashboard:
         self.auto_button = ttk.Button(controls, text="Auto-Join OFF", command=self.toggle_auto_join)
         self.auto_button.pack(side="left", padx=4)
 
-        metrics = ttk.Frame(shell)
-        metrics.pack(fill="x", pady=(0, 10))
-        for idx in range(7):
-            metrics.columnconfigure(idx, weight=1, uniform="metric")
-        for idx, key in enumerate(("estimate", "poll", "eta", "velocity", "confidence", "votes", "health")):
-            self._metric_card(metrics, key, idx)
+        self._build_live_band(shell)
 
         notebook = ttk.Notebook(shell, style="Dashboard.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -4460,6 +4480,65 @@ class DesktopDashboard:
             "Downtime Impact",
         )
 
+    def _build_live_band(self, parent: Any) -> None:
+        ttk = self.ttk
+        tk = self.tk
+        band = ttk.Frame(parent)
+        band.pack(fill="x", pady=(0, 12))
+        band.columnconfigure(0, weight=3, uniform="live")
+        band.columnconfigure(1, weight=4, uniform="live")
+
+        hero = ttk.Frame(band, style="Hero.TFrame", padding=(18, 16))
+        hero.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        ttk.Label(
+            hero,
+            text="LIVE VOTE PARTY POSITION",
+            style="HeroMuted.TLabel",
+            font=("Helvetica", 10, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(hero, textvariable=self.hero_vars["estimate"], style="HeroValue.TLabel").pack(
+            anchor="w", pady=(4, 0)
+        )
+        ttk.Label(
+            hero,
+            textvariable=self.hero_vars["remaining"],
+            style="HeroMuted.TLabel",
+            font=("Helvetica", 13),
+        ).pack(anchor="w")
+        self.progress_canvas = tk.Canvas(
+            hero,
+            height=18,
+            bg=self.colors["card"],
+            highlightthickness=0,
+            bd=0,
+        )
+        self.progress_canvas.pack(fill="x", pady=(14, 10))
+        self.progress_canvas.bind("<Configure>", lambda _event: self.redraw_progress())
+        badges = ttk.Frame(hero, style="Hero.TFrame")
+        badges.pack(fill="x")
+        for key in ("confidence", "poll", "sources"):
+            ttk.Label(
+                badges,
+                textvariable=self.hero_vars[key],
+                style="HeroMuted.TLabel",
+                font=("Helvetica", 11, "bold"),
+            ).pack(side="left", padx=(0, 18))
+        ttk.Label(
+            hero,
+            textvariable=self.hero_vars["status"],
+            style="HeroMuted.TLabel",
+            font=("Helvetica", 11),
+        ).pack(anchor="w", pady=(10, 0))
+
+        metrics = ttk.Frame(band)
+        metrics.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        for column in range(3):
+            metrics.columnconfigure(column, weight=1, uniform="metric")
+        for row in range(2):
+            metrics.rowconfigure(row, weight=1, uniform="metric")
+        for index, key in enumerate(("poll", "eta", "velocity", "confidence", "votes", "health")):
+            self._metric_card(metrics, key, index // 3, index % 3)
+
     def _tab(self, notebook: Any, title: str) -> Any:
         frame = self.ttk.Frame(notebook, style="Panel.TFrame", padding=(10, 0, 10, 10))
         notebook.add(frame, text=title)
@@ -4471,17 +4550,18 @@ class DesktopDashboard:
         for idx in range(rows):
             frame.rowconfigure(idx, weight=1, uniform=f"row-{rows}")
 
-    def _metric_card(self, parent: Any, key: str, column: int) -> None:
+    def _metric_card(self, parent: Any, key: str, row: int, column: int) -> None:
         ttk = self.ttk
-        frame = ttk.Frame(parent, style="Card.TFrame", padding=12)
-        frame.grid(row=0, column=column, sticky="nsew", padx=5, pady=8)
+        frame = ttk.Frame(parent, style="MetricCard.TFrame", padding=(12, 10))
+        frame.grid(row=row, column=column, sticky="nsew", padx=5, pady=5)
+        self.metric_frames[key] = frame
         label = key.replace("_", " ").upper()
-        ttk.Label(frame, text=label, style="MutedCard.TLabel", font=("Helvetica", 10, "bold")).pack(anchor="w")
+        ttk.Label(frame, text=label, style="MutedMetric.TLabel", font=("Helvetica", 9, "bold")).pack(anchor="w")
         value = self.tk.StringVar(value="--")
         sub = self.tk.StringVar(value="--")
         self.metric_vars[key] = (value, sub)
         ttk.Label(frame, textvariable=value, style="Metric.TLabel").pack(anchor="w", pady=(4, 0))
-        ttk.Label(frame, textvariable=sub, style="MutedCard.TLabel").pack(anchor="w")
+        ttk.Label(frame, textvariable=sub, style="MutedMetric.TLabel").pack(anchor="w")
 
     def _card(self, parent: Any, title: str, subtitle: str, popout_key: str | None = None) -> Any:
         ttk = self.ttk
@@ -4518,6 +4598,9 @@ class DesktopDashboard:
             tree.column(column, width=110, anchor="w", stretch=True)
         tree.tag_configure("even", background=self.colors["panel"])
         tree.tag_configure("odd", background="#111a21")
+        tree.tag_configure("alert", foreground=self.colors["danger"])
+        tree.tag_configure("warn", foreground=self.colors["warning"])
+        tree.tag_configure("good", foreground=self.colors["accent"])
         yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=yscroll.set)
         tree.pack(side="left", fill="both", expand=True)
@@ -4547,8 +4630,7 @@ class DesktopDashboard:
         self.status_var.set(
             f"Updated {datetime.now().strftime('%H:%M:%S')} | next poll {format_duration(state.get('next_poll_seconds'))}"
         )
-        self.metric_vars["estimate"][0].set(f"{state['estimate']}/{state['party_size']}")
-        self.metric_vars["estimate"][1].set(f"{state['remaining']} remaining")
+        self.update_hero(state, stats, payload)
         self.update_poll_metric(state)
         self.metric_vars["eta"][0].set(format_duration(stats["eta"]["consensus_seconds"]))
         self.metric_vars["eta"][1].set(
@@ -4810,6 +4892,64 @@ class DesktopDashboard:
         )
         self.redraw_flow()
 
+    def update_hero(
+        self, state: dict[str, Any], stats: dict[str, Any], payload: dict[str, Any]
+    ) -> None:
+        estimate = int(state["estimate"])
+        party_size = int(state["party_size"])
+        remaining = int(state["remaining"])
+        confidence = str(state["confidence"]).upper()
+        eta = format_duration(stats["eta"]["consensus_seconds"])
+        phase = str(stats["forecast"]["readiness"]["phase"]).replace("_", " ")
+        quality = round(float(stats["forecast"]["data_quality"]["score"]))
+        source_count = len([source for source in payload.get("sources", []) if source.get("enabled")])
+        active_loaded = int(stats["source_mix"].get("active_sources_loaded", 0))
+        self.hero_vars["estimate"].set(f"{estimate}/{party_size}")
+        self.hero_vars["remaining"].set(f"{remaining} votes remaining")
+        self.hero_vars["eta"].set(f"ETA {eta}")
+        self.hero_vars["confidence"].set(f"{confidence} confidence")
+        self.hero_vars["poll"].set(f"next poll {format_duration(state.get('next_poll_seconds'))}")
+        self.hero_vars["sources"].set(f"{active_loaded}/{source_count} sources fresh")
+        self.hero_vars["status"].set(
+            f"{phase} | {eta} ETA | data quality {quality}%"
+        )
+        self.redraw_progress(state)
+
+    def redraw_progress(self, state: dict[str, Any] | None = None) -> None:
+        canvas = self.progress_canvas
+        if canvas is None:
+            return
+        if state is None:
+            if not self.latest_payload:
+                return
+            state = self.latest_payload["state"]
+        estimate = int(state.get("estimate") or 0)
+        party_size = max(1, int(state.get("party_size") or 120))
+        remaining = int(state.get("remaining") or 0)
+        ratio = max(0.0, min(1.0, estimate / party_size))
+        width = max(1, canvas.winfo_width())
+        height = max(1, canvas.winfo_height())
+        colors = self.colors
+        fill = colors["accent"]
+        if remaining <= 4:
+            fill = colors["danger"]
+        elif remaining <= 10:
+            fill = colors["warning"]
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, width, height, fill=colors["card_soft"], outline="")
+        canvas.create_rectangle(0, 0, int(width * ratio), height, fill=fill, outline="")
+        for threshold in (100, 116):
+            x = int(width * min(1.0, threshold / party_size))
+            canvas.create_line(x, 0, x, height, fill=colors["line"])
+        canvas.create_text(
+            width - 8,
+            height / 2,
+            text=f"{round(ratio * 100)}%",
+            fill=colors["text"],
+            anchor="e",
+            font=("Menlo", 10, "bold"),
+        )
+
     def update_poll_metric(self, state: dict[str, Any]) -> None:
         if self.next_poll_due_at:
             remaining = max(
@@ -5004,11 +5144,20 @@ class DesktopDashboard:
         for item in tree.get_children():
             tree.delete(item)
         for index, row in enumerate(rows):
+            values = tuple("" if value is None else value for value in row)
+            tag_names = ["odd" if index % 2 else "even"]
+            lowered = {str(value).lower() for value in values}
+            if lowered & {"critical", "major", "fail"}:
+                tag_names.append("alert")
+            elif lowered & {"moderate", "minor", "skip"}:
+                tag_names.append("warn")
+            elif lowered & {"high", "ok"}:
+                tag_names.append("good")
             tree.insert(
                 "",
                 "end",
-                values=tuple("" if value is None else value for value in row),
-                tags=("odd" if index % 2 else "even",),
+                values=values,
+                tags=tuple(tag_names),
             )
 
     def open_table_popout(self, table_name: str, title: str) -> None:
