@@ -164,6 +164,11 @@ class StoreTests(unittest.TestCase):
                 snapshot = store.dashboard_snapshot()
                 self.assertEqual(snapshot.state["estimate"], 100)
                 self.assertFalse(snapshot.state["auto_join_enabled"])
+                self.assertTrue(snapshot.state["vote_notifications_enabled"])
+                store.set_vote_notifications_enabled(False)
+                self.assertFalse(
+                    store.dashboard_snapshot().state["vote_notifications_enabled"]
+                )
                 self.assertIn("velocity_windows", snapshot.stats)
                 self.assertGreaterEqual(len(snapshot.stats["velocity_windows"]), 4)
             finally:

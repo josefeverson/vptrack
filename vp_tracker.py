@@ -1441,6 +1441,15 @@ class Store:
     def set_auto_join_enabled(self, enabled: bool) -> None:
         self.set_runtime("auto_join_enabled", "1" if enabled else "0")
 
+    def vote_notifications_enabled(self) -> bool:
+        override = self.get_runtime("vote_notifications_enabled")
+        if override:
+            return override == "1"
+        return bool(self.config.get("gui", {}).get("vote_notifications", True))
+
+    def set_vote_notifications_enabled(self, enabled: bool) -> None:
+        self.set_runtime("vote_notifications_enabled", "1" if enabled else "0")
+
     def source_inference_key(self, name: str, field: str) -> str:
         return f"source_inference:{name}:{field}"
 
@@ -2284,6 +2293,7 @@ class Store:
                 "next_poll_due_at": iso(next_poll_due) if next_poll_due else None,
                 "next_poll_seconds": next_poll_seconds,
                 "auto_join_enabled": self.auto_join_enabled(),
+                "vote_notifications_enabled": self.vote_notifications_enabled(),
             },
             stats=stats,
             history=history,
@@ -3917,6 +3927,13 @@ def make_dashboard_handler(
                     payload = dashboard_to_dict(store.dashboard_snapshot())
                 json_response(self, 200, payload)
                 return
+            if parsed.path == "/api/notifications":
+                enabled = bool(payload.get("enabled", False))
+                with store.lock:
+                    store.set_vote_notifications_enabled(enabled)
+                    payload = dashboard_to_dict(store.dashboard_snapshot())
+                json_response(self, 200, payload)
+                return
             if parsed.path == "/api/poll":
                 with store.lock:
                     cycle = poll_sources(store, config)
@@ -4084,6 +4101,7 @@ td {{ color: var(--text); }}
       <button id="calibrateButton">Calibrate</button>
       <button id="pollButton">Poll Now</button>
       <button id="autoJoinButton">Auto-Join OFF</button>
+      <button id="notifyButton">Notify ON</button>
       <button id="pauseButton">Pause UI</button>
     </div>
   </header>
@@ -4213,6 +4231,8 @@ function render(data) {{
   $("streak").textContent = `${{stats.forecast.readiness.phase}} · quality ${{Math.round(stats.forecast.data_quality.score)}}%`;
   $("autoJoinButton").textContent = state.auto_join_enabled ? "Auto-Join ON" : "Auto-Join OFF";
   $("autoJoinButton").className = state.auto_join_enabled ? "warn" : "";
+  $("notifyButton").textContent = state.vote_notifications_enabled ? "Notify ON" : "Notify OFF";
+  $("notifyButton").className = state.vote_notifications_enabled ? "" : "bad";
   renderVelocity(stats.velocity_windows);
   renderSources(stats.source_mix.last_24h);
   renderLastVoters(data.history.latest_voters);
@@ -4327,6 +4347,15 @@ $("pollButton").onclick = async () => {{
 $("autoJoinButton").onclick = async () => {{
   const enabled = !(latest && latest.state && latest.state.auto_join_enabled);
   const res = await fetch(api("/api/autojoin"), {{
+    method: "POST",
+    headers: {{"Content-Type": "application/json"}},
+    body: JSON.stringify({{enabled}})
+  }});
+  render(await res.json());
+}};
+$("notifyButton").onclick = async () => {{
+  const enabled = !(latest && latest.state && latest.state.vote_notifications_enabled);
+  const res = await fetch(api("/api/notifications"), {{
     method: "POST",
     headers: {{"Content-Type": "application/json"}},
     body: JSON.stringify({{enabled}})
@@ -4683,6 +4712,8 @@ class DesktopDashboard:
         ttk.Button(controls, text="Auto", command=self.clear_poll_interval).pack(side="left", padx=2)
         self.auto_button = ttk.Button(controls, text="Auto-Join OFF", command=self.toggle_auto_join)
         self.auto_button.pack(side="left", padx=4)
+        self.notify_button = ttk.Button(controls, text="Notify ON", command=self.toggle_notifications)
+        self.notify_button.pack(side="left", padx=4)
 
         self._build_live_band(shell)
 
@@ -5063,7 +5094,9 @@ class DesktopDashboard:
         self.metric_vars["velocity"][0].set(format_rate((velocity_30 or {}).get("velocity_per_minute")))
         self.metric_vars["velocity"][1].set("30m rolling")
         self.metric_vars["confidence"][0].set(str(state["confidence"]))
-        self.metric_vars["confidence"][1].set("auto-join ON" if state["auto_join_enabled"] else "auto-join OFF")
+        notify_label = "notify ON" if state["vote_notifications_enabled"] else "notify OFF"
+        auto_label = "auto-join ON" if state["auto_join_enabled"] else "auto-join OFF"
+        self.metric_vars["confidence"][1].set(f"{auto_label} | {notify_label}")
         self.metric_vars["votes"][0].set(str(stats["votes"]["last_24h"]))
         self.metric_vars["votes"][1].set(f"{stats['votes']['last_7d']} in 7d")
         self.metric_vars["health"][0].set(f"{round((1 - stats['polling']['failure_rate_loaded']) * 100)}%")
@@ -5072,6 +5105,9 @@ class DesktopDashboard:
         )
         self.sync_poll_interval_entry(state)
         self.auto_button.configure(text="Auto-Join ON" if state["auto_join_enabled"] else "Auto-Join OFF")
+        self.notify_button.configure(
+            text="Notify ON" if state["vote_notifications_enabled"] else "Notify OFF"
+        )
         self._set_rows(
             "velocity",
             [
@@ -5172,6 +5208,7 @@ class DesktopDashboard:
         total_only = sum(int(row["total_only_polls"]) for row in diagnostics)
         advanced_rows = [
             ("Auto-join", "ON" if state["auto_join_enabled"] else "OFF"),
+            ("Notifications", "ON" if state["vote_notifications_enabled"] else "OFF"),
             ("Next poll", format_duration(state.get("next_poll_seconds"))),
             (
                 "Poll interval",
@@ -5435,7 +5472,7 @@ class DesktopDashboard:
             and int(cycle.get("total_delta") or 0) > 0
         ]
         self.last_seen_cycle_id = max(max_cycle_id, self.last_seen_cycle_id)
-        if not new_cycles or not self.config.get("gui", {}).get("vote_notifications", True):
+        if not new_cycles or not self.store.vote_notifications_enabled():
             return
         amount = sum(int(cycle.get("total_delta") or 0) for cycle in new_cycles)
         latest = max(new_cycles, key=lambda cycle: int(cycle.get("id") or 0))
@@ -5808,6 +5845,13 @@ class DesktopDashboard:
     def toggle_auto_join(self) -> None:
         with self.store.lock:
             self.store.set_auto_join_enabled(not self.store.auto_join_enabled())
+        self.refresh()
+
+    def toggle_notifications(self) -> None:
+        with self.store.lock:
+            self.store.set_vote_notifications_enabled(
+                not self.store.vote_notifications_enabled()
+            )
         self.refresh()
 
 
