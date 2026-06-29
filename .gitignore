@@ -15,6 +15,7 @@ vp_tracker.sqlite3
 *.db
 *.db-shm
 *.db-wal
+exports/
 
 .DS_Store
 

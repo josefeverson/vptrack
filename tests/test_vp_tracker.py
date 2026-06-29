@@ -165,10 +165,18 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(snapshot.state["estimate"], 100)
                 self.assertFalse(snapshot.state["auto_join_enabled"])
                 self.assertTrue(snapshot.state["vote_notifications_enabled"])
+                self.assertTrue(snapshot.state["vote_notifications_active"])
+                self.assertEqual(snapshot.state["vote_notifications_snooze_seconds"], 0)
+                store.snooze_vote_notifications(1800)
+                snoozed = store.dashboard_snapshot()
+                self.assertTrue(snoozed.state["vote_notifications_enabled"])
+                self.assertFalse(snoozed.state["vote_notifications_active"])
+                self.assertGreater(snoozed.state["vote_notifications_snooze_seconds"], 0)
+                store.clear_vote_notification_snooze()
                 store.set_vote_notifications_enabled(False)
-                self.assertFalse(
-                    store.dashboard_snapshot().state["vote_notifications_enabled"]
-                )
+                disabled = store.dashboard_snapshot()
+                self.assertFalse(disabled.state["vote_notifications_enabled"])
+                self.assertFalse(disabled.state["vote_notifications_active"])
                 self.assertIn("velocity_windows", snapshot.stats)
                 self.assertGreaterEqual(len(snapshot.stats["velocity_windows"]), 4)
             finally:

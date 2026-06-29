@@ -1450,6 +1450,24 @@ class Store:
     def set_vote_notifications_enabled(self, enabled: bool) -> None:
         self.set_runtime("vote_notifications_enabled", "1" if enabled else "0")
 
+    def vote_notifications_snoozed_until(self) -> datetime | None:
+        snoozed_until = parse_iso(self.get_runtime("vote_notifications_snoozed_until"))
+        if snoozed_until and snoozed_until > utc_now():
+            return snoozed_until
+        return None
+
+    def vote_notifications_active(self) -> bool:
+        return self.vote_notifications_enabled() and not self.vote_notifications_snoozed_until()
+
+    def snooze_vote_notifications(self, seconds: int) -> None:
+        self.set_runtime(
+            "vote_notifications_snoozed_until",
+            iso(utc_now() + timedelta(seconds=max(1, int(seconds)))),
+        )
+
+    def clear_vote_notification_snooze(self) -> None:
+        self.clear_runtime("vote_notifications_snoozed_until")
+
     def source_inference_key(self, name: str, field: str) -> str:
         return f"source_inference:{name}:{field}"
 
@@ -2241,10 +2259,17 @@ class Store:
         override_interval = self.poll_interval_override_seconds()
         effective_interval = self.effective_poll_interval_seconds(estimate)
         next_poll_due = self.next_poll_due_at()
+        now = utc_now()
         next_poll_seconds = (
-            max(0, int(math.ceil((next_poll_due - utc_now()).total_seconds())))
+            max(0, int(math.ceil((next_poll_due - now).total_seconds())))
             if next_poll_due
             else None
+        )
+        notification_snoozed_until = self.vote_notifications_snoozed_until()
+        notification_snooze_seconds = (
+            max(0, int(math.ceil((notification_snoozed_until - now).total_seconds())))
+            if notification_snoozed_until
+            else 0
         )
         sources = []
         for row in self.source_rows():
@@ -2294,6 +2319,11 @@ class Store:
                 "next_poll_seconds": next_poll_seconds,
                 "auto_join_enabled": self.auto_join_enabled(),
                 "vote_notifications_enabled": self.vote_notifications_enabled(),
+                "vote_notifications_active": self.vote_notifications_active(),
+                "vote_notifications_snoozed_until": (
+                    iso(notification_snoozed_until) if notification_snoozed_until else None
+                ),
+                "vote_notifications_snooze_seconds": notification_snooze_seconds,
             },
             stats=stats,
             history=history,
@@ -3931,6 +3961,19 @@ def make_dashboard_handler(
                 enabled = bool(payload.get("enabled", False))
                 with store.lock:
                     store.set_vote_notifications_enabled(enabled)
+                    if enabled:
+                        store.clear_vote_notification_snooze()
+                    payload = dashboard_to_dict(store.dashboard_snapshot())
+                json_response(self, 200, payload)
+                return
+            if parsed.path == "/api/notifications/snooze":
+                seconds = int(payload.get("seconds", 1800))
+                with store.lock:
+                    if seconds <= 0:
+                        store.clear_vote_notification_snooze()
+                    else:
+                        store.set_vote_notifications_enabled(True)
+                        store.snooze_vote_notifications(seconds)
                     payload = dashboard_to_dict(store.dashboard_snapshot())
                 json_response(self, 200, payload)
                 return
@@ -4102,6 +4145,8 @@ td {{ color: var(--text); }}
       <button id="pollButton">Poll Now</button>
       <button id="autoJoinButton">Auto-Join OFF</button>
       <button id="notifyButton">Notify ON</button>
+      <button id="snoozeButton">Snooze 30m</button>
+      <button id="copyStatusButton">Copy Status</button>
       <button id="pauseButton">Pause UI</button>
     </div>
   </header>
@@ -4199,6 +4244,33 @@ function classForConfidence(value) {{
   if (value === "medium") return "warn";
   return "bad";
 }}
+function notificationLabel(state) {{
+  if (!state.vote_notifications_enabled) return "Notify OFF";
+  if (state.vote_notifications_snooze_seconds > 0) {{
+    return `Snoozed ${{fmtEta(state.vote_notifications_snooze_seconds)}}`;
+  }}
+  return "Notify ON";
+}}
+function notificationClass(state) {{
+  if (!state.vote_notifications_enabled) return "bad";
+  if (state.vote_notifications_snooze_seconds > 0) return "warn";
+  return "";
+}}
+function statusSummary(data) {{
+  const state = data.state;
+  const stats = data.stats;
+  return [
+    `YveScanner status @ ${{new Date(data.generated_at).toLocaleString()}}`,
+    `VP: ${{state.estimate}}/${{state.party_size}} (${{state.remaining}} remaining)`,
+    `Confidence: ${{state.confidence}}`,
+    `ETA: ${{fmtEta(stats.eta.consensus_seconds)}}`,
+    `Velocity 30m: ${{fmtRate((stats.velocity_windows.find(w => w.minutes === 30) || {{}}).velocity_per_minute)}}`,
+    `Poll: every ${{state.poll_interval_seconds}}s, next ${{fmtEta(state.next_poll_seconds)}}`,
+    `Sources: ${{stats.source_mix.active_sources_loaded}} active`,
+    `Auto-join: ${{state.auto_join_enabled ? "ON" : "OFF"}}`,
+    `Notifications: ${{notificationLabel(state)}}`,
+  ].join("\\n");
+}}
 async function loadDashboard() {{
   if (paused) return;
   const res = await fetch(api("/api/dashboard"));
@@ -4231,8 +4303,8 @@ function render(data) {{
   $("streak").textContent = `${{stats.forecast.readiness.phase}} · quality ${{Math.round(stats.forecast.data_quality.score)}}%`;
   $("autoJoinButton").textContent = state.auto_join_enabled ? "Auto-Join ON" : "Auto-Join OFF";
   $("autoJoinButton").className = state.auto_join_enabled ? "warn" : "";
-  $("notifyButton").textContent = state.vote_notifications_enabled ? "Notify ON" : "Notify OFF";
-  $("notifyButton").className = state.vote_notifications_enabled ? "" : "bad";
+  $("notifyButton").textContent = notificationLabel(state);
+  $("notifyButton").className = notificationClass(state);
   renderVelocity(stats.velocity_windows);
   renderSources(stats.source_mix.last_24h);
   renderLastVoters(data.history.latest_voters);
@@ -4354,13 +4426,28 @@ $("autoJoinButton").onclick = async () => {{
   render(await res.json());
 }};
 $("notifyButton").onclick = async () => {{
-  const enabled = !(latest && latest.state && latest.state.vote_notifications_enabled);
+  const active = latest && latest.state && latest.state.vote_notifications_active;
+  const enabled = !active;
   const res = await fetch(api("/api/notifications"), {{
     method: "POST",
     headers: {{"Content-Type": "application/json"}},
     body: JSON.stringify({{enabled}})
   }});
   render(await res.json());
+}};
+$("snoozeButton").onclick = async () => {{
+  const res = await fetch(api("/api/notifications/snooze"), {{
+    method: "POST",
+    headers: {{"Content-Type": "application/json"}},
+    body: JSON.stringify({{seconds: 1800}})
+  }});
+  render(await res.json());
+}};
+$("copyStatusButton").onclick = async () => {{
+  if (!latest) return;
+  await navigator.clipboard.writeText(statusSummary(latest));
+  $("copyStatusButton").textContent = "Copied";
+  setTimeout(() => $("copyStatusButton").textContent = "Copy Status", 1400);
 }};
 $("calibrateButton").onclick = async () => {{
   const count = Number($("calibrateInput").value);
@@ -4714,6 +4801,18 @@ class DesktopDashboard:
         self.auto_button.pack(side="left", padx=4)
         self.notify_button = ttk.Button(controls, text="Notify ON", command=self.toggle_notifications)
         self.notify_button.pack(side="left", padx=4)
+        ttk.Button(controls, text="Snooze 30m", command=self.snooze_notifications).pack(
+            side="left", padx=2
+        )
+        ttk.Button(controls, text="Test", command=self.test_notification).pack(
+            side="left", padx=2
+        )
+        ttk.Button(controls, text="Copy", command=self.copy_status).pack(
+            side="left", padx=2
+        )
+        ttk.Button(controls, text="Export", command=self.export_snapshot).pack(
+            side="left", padx=2
+        )
 
         self._build_live_band(shell)
 
@@ -5074,6 +5173,44 @@ class DesktopDashboard:
             return "--"
         return " / ".join(parts)
 
+    def notification_label(self, state: dict[str, Any]) -> str:
+        if not state.get("vote_notifications_enabled"):
+            return "Notify OFF"
+        snooze_seconds = int(state.get("vote_notifications_snooze_seconds") or 0)
+        if snooze_seconds > 0:
+            return f"Snoozed {format_duration(snooze_seconds)}"
+        return "Notify ON"
+
+    def current_dashboard_payload(self) -> dict[str, Any]:
+        if self.latest_payload:
+            return self.latest_payload
+        with self.store.lock:
+            return dashboard_to_dict(self.store.dashboard_snapshot())
+
+    def status_summary_text(self, payload: dict[str, Any]) -> str:
+        state = payload["state"]
+        stats = payload["stats"]
+        velocity_30 = next(
+            (row for row in stats["velocity_windows"] if row["minutes"] == 30),
+            {},
+        )
+        return "\n".join(
+            [
+                f"{BRAND_NAME} status @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"VP: {state['estimate']}/{state['party_size']} ({state['remaining']} remaining)",
+                f"Confidence: {state['confidence']}",
+                f"ETA: {format_duration(stats['eta']['consensus_seconds'])}",
+                f"Velocity 30m: {format_rate(velocity_30.get('velocity_per_minute'))}",
+                (
+                    f"Poll: every {format_duration(state.get('poll_interval_seconds'))}, "
+                    f"next {format_duration(state.get('next_poll_seconds'))}"
+                ),
+                f"Sources: {stats['source_mix']['active_sources_loaded']} active",
+                f"Auto-join: {'ON' if state['auto_join_enabled'] else 'OFF'}",
+                f"Notifications: {self.notification_label(state)}",
+            ]
+        )
+
     def render(self, payload: dict[str, Any]) -> None:
         self.notify_vote_found(payload)
         self.latest_payload = payload
@@ -5094,7 +5231,7 @@ class DesktopDashboard:
         self.metric_vars["velocity"][0].set(format_rate((velocity_30 or {}).get("velocity_per_minute")))
         self.metric_vars["velocity"][1].set("30m rolling")
         self.metric_vars["confidence"][0].set(str(state["confidence"]))
-        notify_label = "notify ON" if state["vote_notifications_enabled"] else "notify OFF"
+        notify_label = self.notification_label(state).lower()
         auto_label = "auto-join ON" if state["auto_join_enabled"] else "auto-join OFF"
         self.metric_vars["confidence"][1].set(f"{auto_label} | {notify_label}")
         self.metric_vars["votes"][0].set(str(stats["votes"]["last_24h"]))
@@ -5105,9 +5242,7 @@ class DesktopDashboard:
         )
         self.sync_poll_interval_entry(state)
         self.auto_button.configure(text="Auto-Join ON" if state["auto_join_enabled"] else "Auto-Join OFF")
-        self.notify_button.configure(
-            text="Notify ON" if state["vote_notifications_enabled"] else "Notify OFF"
-        )
+        self.notify_button.configure(text=self.notification_label(state))
         self._set_rows(
             "velocity",
             [
@@ -5208,7 +5343,7 @@ class DesktopDashboard:
         total_only = sum(int(row["total_only_polls"]) for row in diagnostics)
         advanced_rows = [
             ("Auto-join", "ON" if state["auto_join_enabled"] else "OFF"),
-            ("Notifications", "ON" if state["vote_notifications_enabled"] else "OFF"),
+            ("Notifications", self.notification_label(state)),
             ("Next poll", format_duration(state.get("next_poll_seconds"))),
             (
                 "Poll interval",
@@ -5472,7 +5607,7 @@ class DesktopDashboard:
             and int(cycle.get("total_delta") or 0) > 0
         ]
         self.last_seen_cycle_id = max(max_cycle_id, self.last_seen_cycle_id)
-        if not new_cycles or not self.store.vote_notifications_enabled():
+        if not new_cycles or not self.store.vote_notifications_active():
             return
         amount = sum(int(cycle.get("total_delta") or 0) for cycle in new_cycles)
         latest = max(new_cycles, key=lambda cycle: int(cycle.get("id") or 0))
@@ -5849,10 +5984,45 @@ class DesktopDashboard:
 
     def toggle_notifications(self) -> None:
         with self.store.lock:
-            self.store.set_vote_notifications_enabled(
-                not self.store.vote_notifications_enabled()
-            )
+            if self.store.vote_notifications_active():
+                self.store.set_vote_notifications_enabled(False)
+            else:
+                self.store.set_vote_notifications_enabled(True)
+                self.store.clear_vote_notification_snooze()
         self.refresh()
+
+    def snooze_notifications(self) -> None:
+        with self.store.lock:
+            self.store.set_vote_notifications_enabled(True)
+            self.store.snooze_vote_notifications(1800)
+        self.status_var.set("Notifications snoozed for 30 minutes")
+        self.refresh()
+
+    def test_notification(self) -> None:
+        payload = self.current_dashboard_payload()
+        estimate = payload.get("state", {}).get("estimate")
+        self.show_vote_notification(
+            1,
+            "Test signal | plushie radar online",
+            estimate,
+        )
+        self.play_vote_sound()
+        self.status_var.set("Test notification sent")
+
+    def copy_status(self) -> None:
+        payload = self.current_dashboard_payload()
+        text = self.status_summary_text(payload)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.status_var.set("Status copied to clipboard")
+
+    def export_snapshot(self) -> None:
+        payload = self.current_dashboard_payload()
+        export_dir = Path("exports")
+        export_dir.mkdir(exist_ok=True)
+        path = export_dir / f"yvescanner-snapshot-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        self.status_var.set(f"Exported {path}")
 
 
 def format_duration(seconds: Any) -> str:

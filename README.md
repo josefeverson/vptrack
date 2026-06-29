@@ -105,7 +105,7 @@ vp-track --healthcheck
 - estimated Vote Party crossing history and interval summaries
 - pop-out windows for dense tables and the vote-flow chart
 - visual plus optional sound notification when new vote activity is detected, including the detected vote amount
-- runtime notification toggle for silencing those vote popups/sounds without restarting
+- runtime notification controls: on/off, 30-minute snooze, test alert, status copy, and local JSON snapshot export
 - calibration mismatch logging with signed error and severity for debugging estimate drift
 
 Optional browser fallback:
