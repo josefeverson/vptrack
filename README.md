@@ -1,6 +1,8 @@
-# Vote Party Tracker
+# YveScanner
 
 Local Python tool for watching public vote pages, estimating the server Vote Party counter, and timing a short Minecraft join window.
+
+> Bringing plushie and roaming profits direct to your computer.
 
 It does not automate voting, CAPTCHA solving, website form submission, chat spam, movement loops, or anti-AFK behavior. Minecraft actions are dry-run notifications by default.
 
@@ -81,7 +83,7 @@ vp-track --healthcheck
 
 ## Dashboard And Statistics
 
-`vp-track --gui` opens a native desktop dashboard. It shows:
+`vp-track --gui` opens the YveScanner native desktop dashboard. It shows:
 
 - compartmentalized native tabs for overview, source health, voters, forecasting, and audit/debug views
 - current VP estimate, remaining votes, confidence, and calibration age

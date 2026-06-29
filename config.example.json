@@ -65,7 +65,7 @@
     "minimum_successful_sources": 3
   },
   "http": {
-    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) VotePartyTracker/1.0",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) YveScanner/1.0",
     "reader_base_url": "https://r.jina.ai/"
   },
   "sources": [

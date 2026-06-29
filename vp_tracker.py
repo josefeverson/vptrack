@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vote Party tracker for a Minecraft server.
+"""YveScanner vote party tracker for a Minecraft server.
 
 This tool reads public vote pages, estimates the in-game Vote Party counter,
 and optionally runs local Minecraft launcher/disconnect commands when a party
@@ -36,6 +36,20 @@ import webbrowser
 
 
 APP_NAME = "vp_tracker"
+BRAND_NAME = "YveScanner"
+BRAND_TAGLINE = "Bringing plushie and roaming profits direct to your computer."
+BRAND_MARK_SVG = """
+<svg class="brand-mark" viewBox="0 0 84 66" aria-hidden="true" role="img">
+  <polygon points="40,30 6,9 12,3 33,20 24,5 30,4 44,27" fill="#E8E4DF" stroke="#D23A5A" stroke-width="3" stroke-linejoin="round"/>
+  <polygon points="44,30 78,9 72,3 51,20 60,5 54,4 40,27" fill="#E8E4DF" stroke="#D23A5A" stroke-width="3" stroke-linejoin="round"/>
+  <polygon points="40,31 17,16 30,23 24,14 37,27" fill="#D9A7B2" opacity=".82"/>
+  <polygon points="44,31 67,16 54,23 60,14 47,27" fill="#D9A7B2" opacity=".82"/>
+  <polygon points="42,34 31,62 42,55 53,62" fill="#7B1E35" stroke="#E04768" stroke-width="3" stroke-linejoin="round"/>
+  <ellipse cx="42" cy="29" rx="9" ry="12" fill="#121416" stroke="#D23A5A" stroke-width="3"/>
+  <circle cx="42" cy="18" r="6" fill="#25272B" stroke="#E8E4DF" stroke-width="2"/>
+  <path d="M34 31 L42 38 L50 31" fill="none" stroke="#E04768" stroke-width="3" stroke-linecap="round"/>
+</svg>
+"""
 DEFAULT_CONFIG_PATH = Path("config.json")
 DEFAULT_DB_PATH = Path("vp_tracker.sqlite3")
 
@@ -110,7 +124,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "user_agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "VotePartyTracker/1.0"
+            "YveScanner/1.0"
         ),
         "reader_base_url": "https://r.jina.ai/",
     },
@@ -3735,7 +3749,7 @@ def run_daemon(store: Store, config: dict[str, Any]) -> None:
     notifier = Notifier(config)
     controller = MinecraftController(config, store, notifier)
     chat = ChatLogTailer(config, store, controller)
-    notifier.notify("Vote Party tracker", "Daemon started.")
+    notifier.notify(BRAND_NAME, "Daemon started.")
     while True:
         with store.lock:
             cycle = poll_sources(store, config)
@@ -3954,26 +3968,30 @@ def dashboard_html(token: str, refresh_seconds: int) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vote Party Tracker</title>
+<title>{BRAND_NAME}</title>
 <style>
 :root {{
   color-scheme: dark;
-  --bg: #090a0b;
-  --panel: #111316;
-  --panel-2: #171a1d;
-  --line: #2a2f33;
-  --text: #eef4ef;
-  --muted: #8f9b95;
-  --mint: #72f0ba;
-  --amber: #f5c66a;
-  --red: #ff6b6b;
-  --steel: #aeb8b2;
+  --bg: #121416;
+  --panel: #1a1c20;
+  --panel-2: #25272B;
+  --line: #7B1E35;
+  --text: #E8E4DF;
+  --muted: #D9A7B2;
+  --mint: #D23A5A;
+  --amber: #E04768;
+  --red: #E04768;
+  --steel: #D9A7B2;
+  --wine: #7B1E35;
 }}
 * {{ box-sizing: border-box; }}
 body {{
   margin: 0;
   min-height: 100vh;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(210, 58, 90, .18), transparent 34%),
+    radial-gradient(circle at 82% 4%, rgba(224, 71, 104, .13), transparent 32%),
+    var(--bg);
   color: var(--text);
   font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }}
@@ -3983,9 +4001,12 @@ button, input {{ font: inherit; }}
   display: flex; justify-content: space-between; gap: 16px; align-items: center;
   padding: 14px 0 18px; border-bottom: 1px solid var(--line);
 }}
-.brand {{ display: flex; gap: 12px; align-items: baseline; }}
-.brand h1 {{ margin: 0; font-size: 18px; letter-spacing: .08em; text-transform: uppercase; }}
+.brand {{ display: flex; gap: 12px; align-items: center; }}
+.brand-mark {{ width: 58px; height: 46px; flex: 0 0 auto; filter: drop-shadow(0 0 12px rgba(224, 71, 104, .26)); }}
+.brand-copy {{ display: grid; gap: 2px; }}
+.brand h1 {{ margin: 0; font-size: 20px; letter-spacing: .08em; text-transform: uppercase; }}
 .brand span {{ color: var(--muted); font-size: 12px; }}
+.brand .quote {{ color: var(--text); opacity: .78; }}
 .controls {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
 button {{
   border: 1px solid var(--line); color: var(--text); background: var(--panel-2);
@@ -3994,14 +4015,15 @@ button {{
 button:hover {{ border-color: var(--mint); }}
 input {{
   width: 92px; border: 1px solid var(--line); color: var(--text);
-  background: #0c0e10; border-radius: 6px; padding: 8px 10px;
+  background: #121416; border-radius: 6px; padding: 8px 10px;
 }}
 .grid {{ display: grid; gap: 14px; margin-top: 16px; }}
 .metrics {{ grid-template-columns: repeat(6, minmax(140px, 1fr)); }}
 .main {{ grid-template-columns: minmax(320px, 1.25fr) minmax(320px, .75fr); }}
 .wide {{ grid-template-columns: 1fr 1fr; }}
 .card {{
-  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  background: linear-gradient(180deg, rgba(37, 39, 43, .94), rgba(18, 20, 22, .94));
+  border: 1px solid rgba(123, 30, 53, .84); border-radius: 8px;
   padding: 14px; min-width: 0;
 }}
 .label {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; }}
@@ -4011,10 +4033,10 @@ input {{
 .warn {{ color: var(--amber); }}
 .bad {{ color: var(--red); }}
 .progress {{
-  height: 10px; border-radius: 5px; overflow: hidden; background: #070808;
+  height: 10px; border-radius: 5px; overflow: hidden; background: #121416;
   border: 1px solid var(--line); margin-top: 12px;
 }}
-.progress div {{ height: 100%; width: 0; background: linear-gradient(90deg, var(--mint), var(--amber)); }}
+.progress div {{ height: 100%; width: 0; background: linear-gradient(90deg, var(--wine), var(--mint), #E8E4DF); }}
 .section-title {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
 .section-title h2 {{ margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .1em; }}
 canvas {{ width: 100%; height: 260px; display: block; }}
@@ -4022,7 +4044,7 @@ canvas {{ width: 100%; height: 260px; display: block; }}
 .heat div {{
   min-height: 72px; border-radius: 5px; border: 1px solid var(--line);
   display: flex; align-items: end; justify-content: center; padding: 4px;
-  color: var(--steel); font-size: 10px; background: #0d0f10;
+  color: var(--steel); font-size: 10px; background: #121416;
 }}
 table {{ width: 100%; border-collapse: collapse; }}
 th, td {{ padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }}
@@ -4050,8 +4072,12 @@ td {{ color: var(--text); }}
 <div class="shell">
   <header class="topbar">
     <div class="brand">
-      <h1>Vote Party Tracker</h1>
-      <span id="updated">booting</span>
+      {BRAND_MARK_SVG}
+      <div class="brand-copy">
+        <h1>{BRAND_NAME}</h1>
+        <span class="quote">{BRAND_TAGLINE}</span>
+        <span id="updated">booting</span>
+      </div>
     </div>
     <div class="controls">
       <input id="calibrateInput" type="number" min="0" placeholder="VP">
@@ -4239,7 +4265,7 @@ function renderHeat(rows) {{
   const maxVotes = Math.max(1, ...rows.map(r => r.votes));
   $("hourHeat").innerHTML = rows.map(row => {{
     const a = row.votes / maxVotes;
-    const bg = `rgba(114, 240, 186, ${{0.08 + a * 0.72}})`;
+    const bg = `rgba(210, 58, 90, ${{0.10 + a * 0.72}})`;
     return `<div style="background:${{bg}}" title="${{row.votes}} votes">${{String(row.hour_utc).padStart(2, "0")}}</div>`;
   }}).join("");
 }}
@@ -4254,9 +4280,9 @@ function drawFlow(cycles, partySize) {{
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#0b0d0f";
+  ctx.fillStyle = "#121416";
   ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = "#252a2e";
+  ctx.strokeStyle = "#7B1E35";
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {{
     const y = 20 + i * ((h - 45) / 4);
@@ -4268,10 +4294,10 @@ function drawFlow(cycles, partySize) {{
   cycles.forEach((c, i) => {{
     const x = 38 + i * step;
     const barH = ((c.total_delta || 0) / maxDelta) * (h - 60);
-    ctx.fillStyle = "rgba(245,198,106,.76)";
+    ctx.fillStyle = "rgba(224, 71, 104, .76)";
     ctx.fillRect(x, h - 25 - barH, Math.max(2, step * .55), barH);
   }});
-  ctx.strokeStyle = "#72f0ba";
+  ctx.strokeStyle = "#E8E4DF";
   ctx.lineWidth = 2;
   ctx.beginPath();
   cycles.forEach((c, i) => {{
@@ -4360,22 +4386,26 @@ class DesktopDashboard:
         self.refresh_ms = max(1, int(config.get("gui", {}).get("refresh_seconds", 5))) * 1000
         self.source_labels = source_display_name_map(config)
         self.colors = {
-            "bg": "#0b1014",
-            "panel": "#0f151b",
-            "card": "#141c23",
-            "card_soft": "#17212a",
-            "line": "#26323a",
-            "text": "#e8f0eb",
-            "muted": "#9aa8a1",
-            "accent": "#7dd3ae",
-            "accent_dim": "#24463a",
-            "warning": "#f5c66a",
-            "blue": "#8fb3ff",
-            "graph_bg": "#0c1217",
-            "danger": "#f08d8d",
+            "bg": "#121416",
+            "panel": "#17191d",
+            "card": "#25272B",
+            "card_soft": "#1d1f23",
+            "line": "#7B1E35",
+            "text": "#E8E4DF",
+            "muted": "#D9A7B2",
+            "accent": "#D23A5A",
+            "accent_strong": "#E04768",
+            "accent_dim": "#7B1E35",
+            "warning": "#E04768",
+            "blue": "#D9A7B2",
+            "graph_bg": "#121416",
+            "danger": "#E04768",
+            "pale": "#E8E4DF",
+            "charcoal": "#121416",
+            "slate": "#25272B",
         }
         self.root = tk.Tk()
-        self.root.title("Vote Party Tracker")
+        self.root.title(BRAND_NAME)
         self.root.geometry("1520x1000")
         self.root.minsize(1180, 760)
         self.root.configure(bg=self.colors["bg"])
@@ -4432,6 +4462,18 @@ class DesktopDashboard:
         style.configure("Panel.TFrame", background=colors["panel"], relief="flat")
         style.configure("TLabel", background=colors["bg"], foreground=colors["text"])
         style.configure("Muted.TLabel", background=colors["bg"], foreground=colors["muted"])
+        style.configure(
+            "Brand.TLabel",
+            background=colors["bg"],
+            foreground=colors["text"],
+            font=("Helvetica", 22, "bold"),
+        )
+        style.configure(
+            "Tagline.TLabel",
+            background=colors["bg"],
+            foreground=colors["muted"],
+            font=("Helvetica", 11),
+        )
         style.configure("Card.TLabel", background=colors["card"], foreground=colors["text"])
         style.configure("Hero.TLabel", background=colors["card"], foreground=colors["text"])
         style.configure("HeroMuted.TLabel", background=colors["card"], foreground=colors["muted"])
@@ -4521,6 +4563,88 @@ class DesktopDashboard:
             foreground=[("selected", colors["text"])],
         )
 
+    def _draw_brand_mark(self, canvas: Any) -> None:
+        colors = self.colors
+        canvas.delete("all")
+        canvas.create_polygon(
+            31,
+            29,
+            3,
+            9,
+            9,
+            3,
+            27,
+            19,
+            20,
+            5,
+            26,
+            4,
+            38,
+            27,
+            fill=colors["pale"],
+            outline=colors["accent"],
+            width=2,
+        )
+        canvas.create_polygon(
+            37,
+            29,
+            65,
+            9,
+            59,
+            3,
+            41,
+            19,
+            48,
+            5,
+            42,
+            4,
+            30,
+            27,
+            fill=colors["pale"],
+            outline=colors["accent"],
+            width=2,
+        )
+        canvas.create_polygon(
+            32,
+            30,
+            12,
+            16,
+            26,
+            23,
+            20,
+            14,
+            fill=colors["muted"],
+            outline="",
+        )
+        canvas.create_polygon(
+            36,
+            30,
+            56,
+            16,
+            42,
+            23,
+            48,
+            14,
+            fill=colors["muted"],
+            outline="",
+        )
+        canvas.create_polygon(
+            34,
+            33,
+            25,
+            55,
+            34,
+            50,
+            43,
+            55,
+            fill=colors["accent_dim"],
+            outline=colors["accent_strong"],
+            width=2,
+        )
+        canvas.create_oval(26, 20, 42, 42, fill=colors["charcoal"], outline=colors["accent"], width=2)
+        canvas.create_oval(29, 9, 39, 19, fill=colors["slate"], outline=colors["pale"], width=1)
+        canvas.create_line(27, 31, 34, 38, 41, 31, fill=colors["accent_strong"], width=2, capstyle="round")
+
     def _build_layout(self) -> None:
         tk = self.tk
         ttk = self.ttk
@@ -4531,10 +4655,21 @@ class DesktopDashboard:
 
         header = ttk.Frame(shell)
         header.pack(fill="x", pady=(0, 10))
+        logo = tk.Canvas(
+            header,
+            width=68,
+            height=58,
+            bg=self.colors["bg"],
+            highlightthickness=0,
+            bd=0,
+        )
+        logo.pack(side="left", padx=(0, 12))
+        self._draw_brand_mark(logo)
         title = ttk.Frame(header)
         title.pack(side="left")
-        ttk.Label(title, text="Vote Party Tracker", font=("Helvetica", 19, "bold")).pack(anchor="w")
-        ttk.Label(title, textvariable=self.status_var, style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
+        ttk.Label(title, text=BRAND_NAME, style="Brand.TLabel").pack(anchor="w")
+        ttk.Label(title, text=BRAND_TAGLINE, style="Tagline.TLabel").pack(anchor="w", pady=(1, 0))
+        ttk.Label(title, textvariable=self.status_var, style="Muted.TLabel").pack(anchor="w", pady=(3, 0))
         controls = ttk.Frame(header)
         controls.pack(side="right")
         ttk.Entry(controls, textvariable=self.calibrate_var, width=8).pack(side="left", padx=4)
@@ -4746,7 +4881,7 @@ class DesktopDashboard:
         hero.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         ttk.Label(
             hero,
-            text="LIVE VOTE PARTY POSITION",
+            text="LIVE ROAMING PROFIT RADAR",
             style="HeroMuted.TLabel",
             font=("Helvetica", 10, "bold"),
         ).pack(anchor="w")
@@ -5346,7 +5481,7 @@ class DesktopDashboard:
             pass
         frame = self.tk.Frame(window, bg=self.colors["card"], padx=16, pady=14)
         frame.pack(fill="both", expand=True)
-        title = "VOTE FOUND" if amount == 1 else "VOTES FOUND"
+        title = "YVESCANNER SIGNAL" if amount == 1 else "YVESCANNER SIGNALS"
         self.tk.Label(
             frame,
             text=f"{title}  +{amount}",
@@ -5565,7 +5700,7 @@ class DesktopDashboard:
             y = top + (1 - (int(cycle.get("estimate_after") or 0) / max(1, party_size))) * (bottom - top)
             points.extend([x, y])
         if len(points) >= 4:
-            canvas.create_line(*points, fill=colors["accent"], width=2)
+            canvas.create_line(*points, fill=colors["pale"], width=2)
         cumulative = 0
         cumulative_points: list[float] = []
         total_votes = max(1, sum(int(cycle.get("total_delta") or 0) for cycle in cycles))
@@ -5585,8 +5720,8 @@ class DesktopDashboard:
             anchor="e",
         )
         canvas.create_text(left, bottom + 14, text="bars=delta", fill=colors["warning"], anchor="w")
-        canvas.create_text(left + 92, bottom + 14, text="green=VP", fill=colors["accent"], anchor="w")
-        canvas.create_text(left + 170, bottom + 14, text="blue=trend", fill=colors["blue"], anchor="w")
+        canvas.create_text(left + 92, bottom + 14, text="white=VP", fill=colors["pale"], anchor="w")
+        canvas.create_text(left + 174, bottom + 14, text="pink=trend", fill=colors["blue"], anchor="w")
         label_indexes = sorted(
             {
                 0,

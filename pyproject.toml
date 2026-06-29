@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vptrack"
 version = "0.1.0"
-description = "Local Vote Party tracker and short-join timing helper."
+description = "YveScanner local vote party tracker and short-join timing helper."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
