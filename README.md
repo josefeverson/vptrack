@@ -44,6 +44,15 @@ Run tracking and dashboard together:
 vp-track --daemon --gui
 ```
 
+Build a local macOS app you can open and close from Finder:
+
+```bash
+python scripts/build_macos_app.py
+open dist/YveScanner.app
+```
+
+The app runs the tracker and native dashboard together. Closing the dashboard window exits the tracker process launched by the app.
+
 Useful commands:
 
 ```bash
