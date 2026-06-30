@@ -64,6 +64,35 @@ exec "$PYTHON" -u "$TRACKER" --config "$CONFIG" --daemon --gui >> "$LOG_DIR/yves
 """
 
 
+def build_calibration_helper(python_executable: Path) -> str:
+    quoted_python = shlex.quote(str(python_executable))
+    return f"""#!/bin/zsh
+set -e
+
+COUNT="$1"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHON={quoted_python}
+SUPPORT_DIR="$HOME/Library/Application Support/YveScanner"
+LOG_DIR="$HOME/Library/Logs/YveScanner"
+TRACKER="$SCRIPT_DIR/vp_tracker.py"
+CONFIG="$SUPPORT_DIR/config.json"
+
+if [ -z "$COUNT" ]; then
+  echo "Usage: calibrate-yvescanner.sh <count>" >&2
+  exit 2
+fi
+
+mkdir -p "$SUPPORT_DIR" "$LOG_DIR"
+
+if [ ! -f "$CONFIG" ]; then
+  cp "$SCRIPT_DIR/config.seed.json" "$CONFIG"
+fi
+
+cd "$SUPPORT_DIR"
+exec "$PYTHON" -u "$TRACKER" --config "$CONFIG" --calibrate "$COUNT" --calibration-source minecraft_mod >> "$LOG_DIR/yvescanner-calibrator.log" 2>> "$LOG_DIR/yvescanner-calibrator.err.log"
+"""
+
+
 def discover_python_runtime(project_root: Path) -> Path:
     venv_cfg = project_root / ".venv" / "pyvenv.cfg"
     if venv_cfg.exists():
@@ -135,6 +164,7 @@ def build_app(project_root: Path, output_dir: Path) -> Path:
     shutil.copy2(project_root / "vp_tracker.py", resources / "vp_tracker.py")
     write_config_seed(project_root, resources)
     write_database_seed(project_root, resources)
+    python_runtime = discover_python_runtime(project_root)
 
     info = {
         "CFBundleDevelopmentRegion": "en",
@@ -168,8 +198,12 @@ def build_app(project_root: Path, output_dir: Path) -> Path:
     (contents / "PkgInfo").write_text("APPL????", encoding="utf-8")
 
     launcher = macos / APP_NAME
-    launcher.write_text(build_launcher(discover_python_runtime(project_root)), encoding="utf-8")
+    launcher.write_text(build_launcher(python_runtime), encoding="utf-8")
     launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    helper = resources / "calibrate-yvescanner.sh"
+    helper.write_text(build_calibration_helper(python_runtime), encoding="utf-8")
+    helper.chmod(helper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     return app_path
 

@@ -3796,7 +3796,8 @@ def run_daemon(store: Store, config: dict[str, Any]) -> None:
             cycle.log_events.extend(chat.poll())
             cycle.action_messages.extend(controller.maybe_act(cycle.confidence))
             cycle.action_messages.extend(controller.monitor_online_limits())
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {describe_cycle(cycle, store, config)}")
+            description = describe_cycle(cycle, store, config)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {description}")
         for source_result in cycle.source_results:
             if source_result.success:
                 detail = f"delta={source_result.delta}"
@@ -6106,6 +6107,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Set current in-game VP count, e.g. --calibrate 73.",
     )
     parser.add_argument(
+        "--calibration-source",
+        default="manual",
+        help="Source label to store with --calibrate (default: manual).",
+    )
+    parser.add_argument(
         "--once",
         action="store_true",
         help="Poll all sources once, update state, and exit.",
@@ -6186,7 +6192,7 @@ def main(argv: list[str] | None = None) -> int:
     store = Store(db_path, config)
     try:
         if args.calibrate is not None:
-            store.calibrate(args.calibrate)
+            store.calibrate(args.calibrate, source=args.calibration_source)
             publish_next_poll_due(store, utc_now(), args.calibrate)
             print(f"Calibrated VP estimate to {args.calibrate % int(config['vp_party_size'])}/120")
 
